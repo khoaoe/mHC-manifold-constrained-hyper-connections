@@ -28,7 +28,7 @@ class TestRMSNorm:
         norm = RMSNorm(dim=8, eps=0.0)
         with torch.no_grad():
             norm.weight.copy_(torch.ones(8))
-        x = torch.ones(1, 1, 8) / (8**0.5)
+        x = torch.ones(1, 1, 8)
         y = norm(x)
         torch.testing.assert_close(y, x, atol=1e-5, rtol=1e-5)
 

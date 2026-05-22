@@ -23,6 +23,8 @@ def _parse_runs(run_args: List[str]) -> Dict[str, Path]:
 def _format_val(value: float) -> str:
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return "nan"
+    if isinstance(value, str):
+        return value
     if isinstance(value, int):
         return str(value)
     return f"{float(value):.4f}"
@@ -35,7 +37,7 @@ def _markdown_table(headers: List[str], rows: List[List[str]]) -> str:
             widths[i] = max(widths[i], len(cell))
 
     header_line = "| " + " | ".join(h.ljust(widths[i]) for i, h in enumerate(headers)) + " |"
-    sep_line = "| " + " | ".join("-" * widths[i] for i in range(len(headers))) + " |"
+    sep_line = "| " + " | ".join("-" * max(widths[i], 3) for i in range(len(headers))) + " |"
     row_lines = [
         "| " + " | ".join(row[i].ljust(widths[i]) for i in range(len(headers))) + " |"
         for row in rows
