@@ -17,7 +17,7 @@ REPORT_DIR="$ROOT/reports/qwen-4090-full"
 LOG_DIR="$ROOT/logs"
 NUM_TRAIN_SHARDS="${NUM_TRAIN_SHARDS:-9}"   # 9 train + 1 val = 1B tokens
 
-MAX_ITERS="${MAX_ITERS:-5000}"
+MAX_ITERS="${MAX_ITERS:-13750}"
 BATCH_SIZE="${BATCH_SIZE:-4}"
 GRAD_ACCUM="${GRAD_ACCUM:-16}"
 BLOCK_SIZE="${BLOCK_SIZE:-1024}"
@@ -139,7 +139,7 @@ train_variant() {
         --dtype "$DTYPE" \
         --device cuda \
         --compile true \
-        --lr 3e-4 \
+        --lr 5e-4 \
         --weight-decay 0.1 \
         --amax-log-interval "$AMAX_LOG_INTERVAL" \
         --amax-eval true \
