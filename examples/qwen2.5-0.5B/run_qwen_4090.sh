@@ -15,14 +15,15 @@ cd "$ROOT"
 DATA_DIR="$ROOT/data/fineweb10B"
 REPORT_DIR="$ROOT/reports/qwen-4090-full"
 LOG_DIR="$ROOT/logs"
-NUM_TRAIN_SHARDS="${NUM_TRAIN_SHARDS:-9}"   # 9 train + 1 val = 1B tokens
+NUM_TRAIN_SHARDS="${NUM_TRAIN_SHARDS:-7}"   # 7 shards là dư xăng chạy (~655M tokens)
 
-MAX_ITERS="${MAX_ITERS:-13750}"
-BATCH_SIZE="${BATCH_SIZE:-4}"
-GRAD_ACCUM="${GRAD_ACCUM:-16}"
-BLOCK_SIZE="${BLOCK_SIZE:-1024}"
+# --- FINAL CONFIG CHO RTX 4090 ---
+MAX_ITERS="${MAX_ITERS:-1000}"       # Chạy 1000 bước cập nhật tạ
+BATCH_SIZE="${BATCH_SIZE:-8}"        # Nhồi 8 chuỗi vào để vắt kiệt Tensor Core
+GRAD_ACCUM="${GRAD_ACCUM:-64}"       # 8 * 64 = 512 (Effective Batch mượt như lụa)
+BLOCK_SIZE="${BLOCK_SIZE:-1024}"     # Vừa đủ ngữ cảnh, VRAM thở oxy khỏe re (Sequence Length)
 DTYPE="${DTYPE:-bfloat16}"
-N_STREAMS="${N_STREAMS:-4}"
+N_STREAMS="${N_STREAMS:-4}"          # BẮT BUỘC để n=4 giữ đúng chuẩn paper
 SINKHORN_TMAX="${SINKHORN_TMAX:-20}"
 AMAX_LOG_INTERVAL="${AMAX_LOG_INTERVAL:-100}"
 

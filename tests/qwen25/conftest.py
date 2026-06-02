@@ -62,14 +62,14 @@ def tiny_qwen_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture
 def fineweb_shard(tmp_path: Path) -> Path:
-    """Create a tiny synthetic FineWeb shard (uint16 memmap, no header).
+    """Create a tiny synthetic FineWeb shard (uint32 memmap, no header).
 
-    Matches what load_fineweb_batch expects: raw uint16 tokens.
+    Matches what load_fineweb_batch expects: raw uint32 tokens.
     """
     import numpy as np
 
     shard_path = tmp_path / "fineweb_00000.bin"
     rng = np.random.default_rng(1337)
-    tokens = rng.integers(0, 256, size=50_000, dtype=np.uint16)
+    tokens = rng.integers(0, 256, size=50_000, dtype=np.uint32)
     tokens.tofile(shard_path)
     return shard_path

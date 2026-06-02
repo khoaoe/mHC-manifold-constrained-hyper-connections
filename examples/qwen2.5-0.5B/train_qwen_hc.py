@@ -52,7 +52,7 @@ def _list_shards(data_dir: Path) -> List[Path]:
 
 def _get_memmap(path: Path) -> np.memmap:
     if path not in _MEMMAP_CACHE:
-        _MEMMAP_CACHE[path] = np.memmap(path, dtype=np.uint16, mode="r")
+        _MEMMAP_CACHE[path] = np.memmap(path, dtype=np.uint32, mode="r")
     return _MEMMAP_CACHE[path]
 
 

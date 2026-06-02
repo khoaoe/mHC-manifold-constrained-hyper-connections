@@ -65,7 +65,7 @@ class TestFinewebLoader:
         """With multiple shards, train should skip the last one."""
         for i in range(3):
             p = tmp_path / f"fineweb_{i:05d}.bin"
-            np.random.default_rng(i).integers(0, 100, size=1000, dtype=np.uint16).tofile(p)
+            np.random.default_rng(i).integers(0, 100, size=1000, dtype=np.uint32).tofile(p)
         shards = sorted(tmp_path.glob("fineweb*.bin"))
         train_choices = shards[:-1] if len(shards) > 1 else shards
         val_choices = shards[-1:]
