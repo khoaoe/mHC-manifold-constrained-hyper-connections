@@ -17,15 +17,23 @@ REPORT_DIR="$ROOT/reports/qwen-4090-full"
 LOG_DIR="$ROOT/logs"
 NUM_TRAIN_SHARDS="${NUM_TRAIN_SHARDS:-7}"   # 7 shards là dư xăng chạy (~655M tokens)
 
-# --- FINAL CONFIG CHO RTX 4090 ---
-MAX_ITERS="${MAX_ITERS:-1000}"       # Chạy 1000 bước cập nhật tạ
-BATCH_SIZE="${BATCH_SIZE:-4}"        # Giảm xuống 4 vì Vocab của Qwen quá lớn (151936) gây OOM ở lớp cuối
-GRAD_ACCUM="${GRAD_ACCUM:-128}"      # 4 * 128 = 512 (Vẫn giữ nguyên Effective Batch)
-BLOCK_SIZE="${BLOCK_SIZE:-1024}"     # Vừa đủ ngữ cảnh, VRAM thở oxy khỏe re (Sequence Length)
+# --- MỤC TIÊU DỮ LIỆU ---
+TARGET_TOKENS="${TARGET_TOKENS:-524288000}" # ~524M tokens
+
+# --- PHẦN CỨNG RTX 4090 (Chống OOM) ---
+BATCH_SIZE="${BATCH_SIZE:-8}"        # Batch vật lý (vừa VRAM 24GB)
+BLOCK_SIZE="${BLOCK_SIZE:-1024}"     # Sequence Length
+GRAD_ACCUM="${GRAD_ACCUM:-8}"        # 8 * 8 = 64 (EBS chuẩn cho model 0.5B)
 DTYPE="${DTYPE:-bfloat16}"
 N_STREAMS="${N_STREAMS:-4}"          # BẮT BUỘC để n=4 giữ đúng chuẩn paper
 SINKHORN_TMAX="${SINKHORN_TMAX:-20}"
-AMAX_LOG_INTERVAL="${AMAX_LOG_INTERVAL:-100}"
+
+# --- TỰ ĐỘNG TÍNH TOÁN STEPS & WARMUP ---
+TOKENS_PER_STEP=$((BATCH_SIZE * GRAD_ACCUM * BLOCK_SIZE))
+MAX_ITERS=$((TARGET_TOKENS / TOKENS_PER_STEP))
+WARMUP_ITERS=$((MAX_ITERS / 10))     # Warmup 10% tổng số steps
+EVAL_INTERVAL=$((MAX_ITERS / 8))     # Eval 8 lần trong quá trình train
+LR="${LR:-6e-4}"
 
 FORCE_RETRAIN="${FORCE_RETRAIN:-0}"
 PRETRAINED="${PRETRAINED:-0}"
@@ -38,10 +46,15 @@ echo "============================================"
 echo "ROOT:           $ROOT"
 echo "DATA_DIR:       $DATA_DIR"
 echo "REPORT_DIR:     $REPORT_DIR"
-echo "MAX_ITERS:      $MAX_ITERS"
-echo "BATCH x ACCUM:  ${BATCH_SIZE}x${GRAD_ACCUM} = $((BATCH_SIZE * GRAD_ACCUM))"
+echo "TARGET_TOKENS:  $TARGET_TOKENS ($((TARGET_TOKENS / 1000000))M)"
+echo "TOKENS/STEP:    $TOKENS_PER_STEP"
+echo "MAX_ITERS:      $MAX_ITERS (auto-calculated)"
+echo "WARMUP_ITERS:   $WARMUP_ITERS (10%)"
+echo "EVAL_INTERVAL:  $EVAL_INTERVAL"
+echo "BATCH x ACCUM:  ${BATCH_SIZE}x${GRAD_ACCUM} = $((BATCH_SIZE * GRAD_ACCUM)) (EBS)"
 echo "N_STREAMS:      $N_STREAMS"
 echo "DTYPE:          $DTYPE"
+echo "LR:             $LR"
 echo "FORCE_RETRAIN:  $FORCE_RETRAIN"
 echo "PRETRAINED:     $PRETRAINED"
 echo "============================================"
@@ -119,6 +132,11 @@ train_variant() {
 
     mkdir -p "$out_dir"
 
+    local num_fracs=1
+    if [ "$method" = "hc" ]; then
+        num_fracs=2
+    fi
+
     # Use stdbuf for realtime logging and tee to file
     stdbuf -oL -eL python -u train_qwen_hc.py \
         --method "$method" \
@@ -127,7 +145,8 @@ train_variant() {
         --n-streams "$N_STREAMS" \
         --sinkhorn-tmax "$SINKHORN_TMAX" \
         --max-iters "$MAX_ITERS" \
-        --eval-interval 500 \
+        --warmup-iters "$WARMUP_ITERS" \
+        --eval-interval "$EVAL_INTERVAL" \
         --eval-iters 50 \
         --batch-size "$BATCH_SIZE" \
         --grad-accum "$GRAD_ACCUM" \
@@ -135,11 +154,10 @@ train_variant() {
         --dtype "$DTYPE" \
         --device cuda \
         --compile true \
-        --lr 5e-4 \
+        --lr "$LR" \
         --weight-decay 0.1 \
-        --amax-log-interval "$AMAX_LOG_INTERVAL" \
-        --amax-eval true \
         --pretrained "$PRETRAINED" \
+        --num-fracs "$num_fracs" \
         2>&1 | tee "$log_file"
 
     if ! run_finished "$out_dir"; then
@@ -189,8 +207,6 @@ echo ""
 echo "Key files:"
 echo "  - training_summary.md"
 echo "  - training_summary.csv"
-echo "  - figures/amax_fwd_curve.png  (Fig 3 style)"
-echo "  - figures/amax_bwd_curve.png  (Fig 7 style)"
 echo "  - figures/val_loss_curve.png"
 echo ""
 

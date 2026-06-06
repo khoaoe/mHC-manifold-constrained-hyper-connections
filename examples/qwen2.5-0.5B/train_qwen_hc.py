@@ -15,7 +15,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 import torch
 
-from qwen_hc_model import build_qwen_hc, compute_amax_gain, forward_with_hc
+from qwen_hc_model import build_qwen_hc, forward_with_hc
 
 DTYPE_MAP: Dict[str, torch.dtype] = {
     "bfloat16": torch.bfloat16,
@@ -105,6 +105,18 @@ def _get_autocast_context(device: str, dtype: torch.dtype):
     return nullcontext()
 
 
+def _get_lr(iter_num: int, warmup_iters: int, max_iters: int, lr_max: float, lr_min: float) -> float:
+    """Cosine learning rate schedule with linear warmup."""
+    if iter_num < warmup_iters:
+        # Linear warmup
+        return lr_max * (iter_num + 1) / warmup_iters
+    if iter_num >= max_iters:
+        return lr_min
+    # Cosine decay
+    progress = (iter_num - warmup_iters) / max(1, max_iters - warmup_iters)
+    return lr_min + 0.5 * (lr_max - lr_min) * (1.0 + math.cos(math.pi * progress))
+
+
 def _evaluate(
     model: torch.nn.Module,
     data_dir: str,
@@ -113,13 +125,9 @@ def _evaluate(
     eval_iters: int,
     device: str,
     dtype: torch.dtype,
-    method: str,
-    amax_eval: bool,
-) -> Tuple[float, float, Dict[str, float]]:
+) -> Tuple[float, float]:
     model.eval()
     losses: List[float] = []
-    amax_fwd_vals: List[float] = []
-    amax_bwd_vals: List[float] = []
 
     autocast_ctx = _get_autocast_context(device, dtype)
     with torch.no_grad():
@@ -132,36 +140,13 @@ def _evaluate(
                 device=device,
             )
             with autocast_ctx:
-                loss, h_res = forward_with_hc(model, x, y)
+                loss = forward_with_hc(model, x, y)
             losses.append(loss.item())
-            if method != "baseline" and amax_eval:
-                fwd, bwd = compute_amax_gain(h_res)
-                amax_fwd_vals.append(fwd)
-                amax_bwd_vals.append(bwd)
 
     val_loss = float(np.mean(losses)) if losses else float("nan")
     val_ppl = math.exp(val_loss) if val_loss < 20 else float("inf")
 
-    if method == "baseline" or not amax_eval or not amax_fwd_vals:
-        amax_stats = {
-            "amax_fwd_final": 1.0,
-            "amax_fwd_max": 1.0,
-            "amax_fwd_mean": 1.0,
-            "amax_bwd_final": 1.0,
-            "amax_bwd_max": 1.0,
-            "amax_bwd_mean": 1.0,
-        }
-        return val_loss, val_ppl, amax_stats
-
-    amax_stats = {
-        "amax_fwd_final": float(amax_fwd_vals[-1]),
-        "amax_fwd_max": float(max(amax_fwd_vals)),
-        "amax_fwd_mean": float(sum(amax_fwd_vals) / len(amax_fwd_vals)),
-        "amax_bwd_final": float(amax_bwd_vals[-1]),
-        "amax_bwd_max": float(max(amax_bwd_vals)),
-        "amax_bwd_mean": float(sum(amax_bwd_vals) / len(amax_bwd_vals)),
-    }
-    return val_loss, val_ppl, amax_stats
+    return val_loss, val_ppl
 
 
 def _parse_args() -> argparse.Namespace:
@@ -172,6 +157,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--n-streams", type=int, default=4)
     parser.add_argument("--sinkhorn-tmax", type=int, default=20)
     parser.add_argument("--max-iters", type=int, default=5000)
+    parser.add_argument("--warmup-iters", type=int, default=0,
+                        help="Number of warmup steps for LR scheduler (0=no warmup)")
     parser.add_argument("--eval-interval", type=int, default=500)
     parser.add_argument("--eval-iters", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=4)
@@ -183,10 +170,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--compile", type=_parse_bool, default=True)
     parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--lr-min", type=float, default=0.0,
+                        help="Minimum LR at end of cosine decay (default: lr/10)")
     parser.add_argument("--weight-decay", type=float, default=0.1)
-    parser.add_argument("--amax-log-interval", type=int, default=100)
-    parser.add_argument("--amax-eval", type=_parse_bool, default=True)
     parser.add_argument("--pretrained", type=_parse_bool, default=False, help="Initialize with pretrained weights for finetuning")
+    parser.add_argument("--num-fracs", type=int, default=1, help="Number of fractions for Frac-Connections")
     return parser.parse_args()
 
 
@@ -200,6 +188,25 @@ def main() -> None:
     dtype = DTYPE_MAP[args.dtype]
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # LR schedule config
+    lr_max = args.lr
+    lr_min = args.lr_min if args.lr_min > 0 else lr_max / 10.0
+    warmup_iters = args.warmup_iters
+
+    tokens_per_step = args.batch_size * args.grad_accum * args.block_size
+    total_tokens = tokens_per_step * args.max_iters
+
+    print(f"📊 Training config:")
+    print(f"   Method:          {args.method}")
+    print(f"   Max iters:       {args.max_iters}")
+    print(f"   Warmup iters:    {warmup_iters}")
+    print(f"   Tokens/step:     {tokens_per_step:,}")
+    print(f"   Total tokens:    {total_tokens:,} ({total_tokens/1e6:.0f}M)")
+    print(f"   EBS:             {args.batch_size * args.grad_accum}")
+    print(f"   LR:              {lr_max} -> {lr_min} (cosine)")
+    if args.method != "baseline":
+        print(f"   Num fracs:       {args.num_fracs}")
 
     _set_seed(1337)
     if device.startswith("cuda"):
@@ -215,6 +222,7 @@ def main() -> None:
         pretrained=args.pretrained,
         dtype=dtype,
         device=device,
+        num_fracs=args.num_fracs,
     )
 
     if args.compile and hasattr(torch, "compile"):
@@ -226,28 +234,29 @@ def main() -> None:
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(
         trainable_params,
-        lr=args.lr,
+        lr=lr_max,
         weight_decay=args.weight_decay,
         betas=(0.9, 0.95),
     )
 
     use_scaler = device.startswith("cuda") and dtype == torch.float16
-    scaler = torch.cuda.amp.GradScaler(enabled=use_scaler)
+    scaler = torch.amp.GradScaler("cuda", enabled=use_scaler)
     autocast_ctx = _get_autocast_context(device, dtype)
 
     best_val_loss = float("inf")
     last_val_loss = float("nan")
     last_val_ppl = float("nan")
     history_rows: List[Dict[str, float]] = []
-    amax_fwd_vals: List[float] = []
-    amax_bwd_vals: List[float] = []
-    last_amax_fwd = 1.0
-    last_amax_bwd = 1.0
 
     start_time = time.time()
     print("🏁 Starting training...")
 
     for iter_num in range(1, args.max_iters + 1):
+        # Update learning rate (cosine schedule with warmup)
+        current_lr = _get_lr(iter_num - 1, warmup_iters, args.max_iters, lr_max, lr_min)
+        for param_group in optimizer.param_groups:
+            param_group["lr"] = current_lr
+
         model.train()
         optimizer.zero_grad(set_to_none=True)
 
@@ -261,17 +270,8 @@ def main() -> None:
                 device=device,
             )
             with autocast_ctx:
-                loss, h_res = forward_with_hc(model, x, y)
+                loss = forward_with_hc(model, x, y)
             train_loss_sum += loss.item()
-
-            if (
-                args.method != "baseline"
-                and iter_num % args.amax_log_interval == 0
-                and micro == 0
-            ):
-                last_amax_fwd, last_amax_bwd = compute_amax_gain(h_res)
-                amax_fwd_vals.append(last_amax_fwd)
-                amax_bwd_vals.append(last_amax_bwd)
 
             loss = loss / args.grad_accum
             if use_scaler:
@@ -294,7 +294,7 @@ def main() -> None:
         val_ppl = None
         if iter_num % args.eval_interval == 0 or iter_num == args.max_iters:
             print("✅ Running eval...")
-            val_loss, val_ppl, eval_amax = _evaluate(
+            val_loss, val_ppl = _evaluate(
                 model=model,
                 data_dir=args.data_dir,
                 block_size=args.block_size,
@@ -302,15 +302,9 @@ def main() -> None:
                 eval_iters=args.eval_iters,
                 device=device,
                 dtype=dtype,
-                method=args.method,
-                amax_eval=args.amax_eval,
             )
             last_val_loss = val_loss
             last_val_ppl = val_ppl
-
-            if args.method != "baseline" and args.amax_eval:
-                last_amax_fwd = eval_amax["amax_fwd_mean"]
-                last_amax_bwd = eval_amax["amax_bwd_mean"]
 
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
@@ -328,10 +322,8 @@ def main() -> None:
                 vram_gb = torch.cuda.max_memory_allocated() / (1024**3)
             msg = (
                 f"⚡ [{iter_num}] loss={train_loss:.4f} "
-                f"grad={float(grad_norm):.4f} vram={vram_gb:.2f}GB"
+                f"grad={float(grad_norm):.4f} lr={current_lr:.2e} vram={vram_gb:.2f}GB"
             )
-            if args.method != "baseline":
-                msg += f" amax_fwd={last_amax_fwd:.3f} amax_bwd={last_amax_bwd:.3f}"
             print(msg)
 
             history_rows.append(
@@ -340,13 +332,12 @@ def main() -> None:
                     "train_loss": float(train_loss),
                     "val_loss": float(val_loss) if val_loss is not None else float("nan"),
                     "grad_norm": float(grad_norm),
-                    "amax_fwd": float(last_amax_fwd),
-                    "amax_bwd": float(last_amax_bwd),
+                    "lr": float(current_lr),
                 }
             )
 
     if math.isnan(last_val_loss):
-        val_loss, val_ppl, _ = _evaluate(
+        val_loss, val_ppl = _evaluate(
             model=model,
             data_dir=args.data_dir,
             block_size=args.block_size,
@@ -354,8 +345,6 @@ def main() -> None:
             eval_iters=args.eval_iters,
             device=device,
             dtype=dtype,
-            method=args.method,
-            amax_eval=args.amax_eval,
         )
         last_val_loss = val_loss
         last_val_ppl = val_ppl
@@ -363,21 +352,6 @@ def main() -> None:
     peak_vram_gb = 0.0
     if device.startswith("cuda"):
         peak_vram_gb = torch.cuda.max_memory_allocated() / (1024**3)
-
-    if args.method == "baseline":
-        amax_fwd_final = amax_fwd_max = amax_fwd_mean = 1.0
-        amax_bwd_final = amax_bwd_max = amax_bwd_mean = 1.0
-    else:
-        if amax_fwd_vals:
-            amax_fwd_final = float(amax_fwd_vals[-1])
-            amax_fwd_max = float(max(amax_fwd_vals))
-            amax_fwd_mean = float(sum(amax_fwd_vals) / len(amax_fwd_vals))
-            amax_bwd_final = float(amax_bwd_vals[-1])
-            amax_bwd_max = float(max(amax_bwd_vals))
-            amax_bwd_mean = float(sum(amax_bwd_vals) / len(amax_bwd_vals))
-        else:
-            amax_fwd_final = amax_fwd_max = amax_fwd_mean = 1.0
-            amax_bwd_final = amax_bwd_max = amax_bwd_mean = 1.0
 
     elapsed_s = time.time() - start_time
 
@@ -389,14 +363,13 @@ def main() -> None:
         "final_train_loss": float(train_loss),
         "final_val_loss": float(last_val_loss),
         "final_val_ppl": float(last_val_ppl),
-        "amax_fwd_final": float(amax_fwd_final),
-        "amax_fwd_max": float(amax_fwd_max),
-        "amax_fwd_mean": float(amax_fwd_mean),
-        "amax_bwd_final": float(amax_bwd_final),
-        "amax_bwd_max": float(amax_bwd_max),
-        "amax_bwd_mean": float(amax_bwd_mean),
         "peak_vram_gb": float(peak_vram_gb),
         "elapsed_s": float(elapsed_s),
+        "tokens_per_step": tokens_per_step,
+        "total_tokens": total_tokens,
+        "warmup_iters": warmup_iters,
+        "lr_max": lr_max,
+        "lr_min": lr_min,
     }
 
     with open(out_dir / "summary.json", "w", encoding="utf-8") as f:
@@ -411,8 +384,7 @@ def main() -> None:
                 "train_loss",
                 "val_loss",
                 "grad_norm",
-                "amax_fwd",
-                "amax_bwd",
+                "lr",
             ],
         )
         writer.writeheader()

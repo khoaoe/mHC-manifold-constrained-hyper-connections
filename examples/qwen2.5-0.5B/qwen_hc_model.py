@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import sys
 from typing import Callable, List, Optional, Tuple
 
 import torch
@@ -9,113 +11,8 @@ from torch import nn
 from torch.nn import functional as F
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizer
 
-
-class RMSNorm(nn.Module):
-    """Root mean square normalization layer."""
-
-    def __init__(self, dim: int, eps: float = 1e-6) -> None:
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(dim))
-        self.eps = eps
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        rms = x.pow(2).mean(dim=-1, keepdim=True)
-        x = x * torch.rsqrt(rms + self.eps)
-        return x * self.weight
-
-
-def sinkhorn_knopp(M: torch.Tensor, tmax: int = 20, eps: float = 1e-6) -> torch.Tensor:
-    """Project matrices onto the Birkhoff polytope via Sinkhorn-Knopp."""
-    M = torch.exp(M)
-    for _ in range(tmax):
-        M = M / (M.sum(dim=-1, keepdim=True) + eps)
-        M = M / (M.sum(dim=-2, keepdim=True) + eps)
-    return M
-
-
-class HyperConnectionBlock(nn.Module):
-    """Hyper-Connection block with optional manifold constraint."""
-
-    def __init__(
-        self,
-        hidden_size: int,
-        n: int = 4,
-        method: str = "mhc",
-        sinkhorn_tmax: int = 20,
-    ) -> None:
-        super().__init__()
-        method = method.lower()
-        if method not in {"baseline", "hc", "mhc"}:
-            raise ValueError(f"Unsupported method: {method}")
-        self.method = method
-        self.n = n
-        self.sinkhorn_tmax = sinkhorn_tmax
-
-        if self.method == "baseline":
-            return
-
-        dim = hidden_size * n
-        self.rms = RMSNorm(dim)
-        self.phi_pre = nn.Linear(dim, n, bias=False)
-        self.phi_post = nn.Linear(dim, n, bias=False)
-        self.phi_res = nn.Linear(dim, n * n, bias=False)
-
-        self.alpha_pre = nn.Parameter(torch.tensor(0.01))
-        self.alpha_post = nn.Parameter(torch.tensor(0.01))
-        self.alpha_res = nn.Parameter(torch.tensor(0.01))
-
-        self.b_pre = nn.Parameter(torch.full((1, n), 1.0 / n))
-        self.b_post = nn.Parameter(torch.ones(1, n))
-        b_res_init = 0.99 * torch.eye(n) + (0.01 / n) * torch.ones(n, n)
-        self.b_res = nn.Parameter(b_res_init)
-
-    def forward(
-        self, x: torch.Tensor, ffn_fn: Callable[[torch.Tensor], torch.Tensor]
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-        if self.method == "baseline":
-            return x + ffn_fn(x), None
-
-        batch_size, seq_len, hidden_size = x.shape
-        n = self.n
-
-        x_exp = x.unsqueeze(2).expand(batch_size, seq_len, n, hidden_size)
-        x_flat = x_exp.reshape(batch_size, seq_len, n * hidden_size)
-        x_norm = self.rms(x_flat)
-
-        h_pre_tilde = self.alpha_pre * torch.tanh(self.phi_pre(x_norm)) + self.b_pre
-        h_post_tilde = self.alpha_post * torch.tanh(self.phi_post(x_norm)) + self.b_post
-        h_res_tilde = (
-            self.alpha_res
-            * torch.tanh(self.phi_res(x_norm).view(batch_size, seq_len, n, n))
-            + self.b_res
-        )
-
-        h_pre = torch.sigmoid(h_pre_tilde)
-        h_post = 2.0 * torch.sigmoid(h_post_tilde)
-        if self.method == "mhc":
-            h_res = sinkhorn_knopp(h_res_tilde, tmax=self.sinkhorn_tmax)
-        else:
-            h_res = h_res_tilde
-
-        x_ffn = torch.einsum("bsn,bsnc->bsc", h_pre, x_exp)
-        ffn_out = ffn_fn(x_ffn)
-        ffn_exp = ffn_out.unsqueeze(2) * h_post.unsqueeze(-1)
-        res_mixed = torch.einsum("bsij,bsjc->bsic", h_res, x_exp)
-        out = (res_mixed + ffn_exp).mean(dim=2)
-        return out, h_res
-
-
-@torch.no_grad()
-def compute_amax_gain(h_res_list: List[torch.Tensor]) -> Tuple[float, float]:
-    """Compute forward/backward Amax gain for the composite residual mapping."""
-    if not h_res_list:
-        return 1.0, 1.0
-    comp = h_res_list[0][0, 0].clone()
-    for h_res in h_res_list[1:]:
-        comp = h_res[0, 0] @ comp
-    fwd = comp.abs().sum(dim=1).max().item()
-    bwd = comp.abs().sum(dim=0).max().item()
-    return fwd, bwd
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+from hyper_connections.hyper_connections import HyperConnections
 
 
 def build_qwen_hc(
@@ -126,6 +23,7 @@ def build_qwen_hc(
     pretrained: bool = False,
     dtype: torch.dtype = torch.bfloat16,
     device: str = "cuda",
+    num_fracs: int = 1,
 ) -> Tuple[nn.Module, PreTrainedTokenizer]:
     """Build a Qwen2.5 model with HC/mHC blocks.
 
@@ -137,6 +35,7 @@ def build_qwen_hc(
         pretrained: Whether to load pretrained weights.
         dtype: Torch dtype for model parameters.
         device: Target device.
+        num_fracs: Number of fractions for Frac-Connections.
 
     Returns:
         (model, tokenizer)
@@ -162,26 +61,43 @@ def build_qwen_hc(
     base_model = _get_base_model(model)
     layers = _get_layers(base_model)
     hidden_size = _infer_hidden_size(config)
+    num_layers = len(layers)
 
-    model.hc_blocks = nn.ModuleList(
-        [
-            HyperConnectionBlock(
-                hidden_size=hidden_size,
-                n=n_streams,
-                method=method,
-                sinkhorn_tmax=sinkhorn_tmax,
-            )
-            for _ in range(len(layers))
-        ]
-    )
+    if method == "baseline":
+        model.hc_blocks = None
+        model._hc_expand = None
+        model._hc_reduce = None
+        hc_params = 0
+    else:
+        # Get expand/reduce stream functions from the library
+        expand_fn, reduce_fn = HyperConnections.get_expand_reduce_stream_functions(
+            n_streams
+        )
+        model._hc_expand = expand_fn
+        model._hc_reduce = reduce_fn
+
+        model.hc_blocks = nn.ModuleList(
+            [
+                HyperConnections(
+                    num_residual_streams=n_streams,
+                    dim=hidden_size,
+                    layer_index=i,
+                    mhc=(method == "mhc"),
+                    sinkhorn_iters=sinkhorn_tmax,
+                    num_fracs=num_fracs,
+                )
+                for i in range(num_layers)
+            ]
+        )
+        hc_params = sum(p.numel() for p in model.hc_blocks.parameters())
+
     model._hc_method = method
     model.to(device=device, dtype=dtype)
 
     total_params = sum(p.numel() for p in model.parameters())
-    hc_params = sum(p.numel() for p in model.hc_blocks.parameters())
     print(
         "✅ Qwen2.5 ready: "
-        f"layers={len(layers)} "
+        f"layers={num_layers} "
         f"total_params={total_params / 1e6:.2f}M "
         f"hc_params={hc_params / 1e6:.2f}M"
     )
@@ -193,8 +109,19 @@ def forward_with_hc(
     input_ids: torch.Tensor,
     labels: torch.Tensor,
     position_ids: Optional[torch.Tensor] = None,
-) -> Tuple[torch.Tensor, List[torch.Tensor]]:
-    """Run a forward pass with HC/mHC replacing the MLP residual path."""
+) -> torch.Tensor:
+    """Run a forward pass with HC/mHC replacing the MLP residual path.
+
+    For baseline: uses native HuggingFace forward (correct RoPE/mask handling).
+    For HC/mHC: manual layer loop with expand/reduce stream functions.
+    """
+
+    # --- Baseline: use native HF forward for correctness ---
+    if model.hc_blocks is None:
+        outputs = model(input_ids, labels=labels)
+        return outputs.loss
+
+    # --- HC / mHC: manual forward with stream expand/reduce ---
     base_model = _get_base_model(model)
     layers = _get_layers(base_model)
 
@@ -210,13 +137,17 @@ def forward_with_hc(
     else:
         raise AttributeError("Could not locate token embedding layer.")
 
+    # Expand to multi-stream residual
+    hidden_states = model._hc_expand(hidden_states)
+
     attention_mask = _build_causal_mask(
         (batch_size, seq_len),
         dtype=hidden_states.dtype,
         device=hidden_states.device,
     )
 
-    h_res_buffer: List[torch.Tensor] = []
+    n_streams = model.hc_blocks[0].num_residual_streams
+
     for i, layer in enumerate(layers):
         attn_norm = getattr(layer, "input_layernorm", None) or getattr(
             layer, "ln_1", None
@@ -227,15 +158,19 @@ def forward_with_hc(
         if attn_norm is None or ffn_norm is None:
             raise AttributeError("Could not locate layer norms for attention/MLP.")
 
+        # Attention: apply on each stream copy independently
         attn_in = attn_norm(hidden_states)
         attn_out = _attn_forward(layer, attn_in, attention_mask, position_ids)
         hidden_states = hidden_states + attn_out
 
+        # MLP with HC/mHC
         ffn_in = ffn_norm(hidden_states)
-        out, h_res = model.hc_blocks[i](ffn_in, layer.mlp)
-        hidden_states = out
-        if h_res is not None:
-            h_res_buffer.append(h_res.detach())
+        branch_input, add_residual_fn = model.hc_blocks[i](ffn_in)
+        branch_output = layer.mlp(branch_input)
+        hidden_states = add_residual_fn(branch_output)
+
+    # Reduce multi-stream back to single stream
+    hidden_states = model._hc_reduce(hidden_states)
 
     norm_layer = getattr(base_model, "norm", None) or getattr(base_model, "ln_f", None)
     if norm_layer is not None:
@@ -243,7 +178,7 @@ def forward_with_hc(
 
     logits = model.lm_head(hidden_states)
     loss = F.cross_entropy(logits.view(-1, logits.size(-1)), labels.view(-1))
-    return loss, h_res_buffer
+    return loss
 
 
 def _infer_hidden_size(config: AutoConfig) -> int:
