@@ -67,17 +67,10 @@ echo "[INFO] Checking FineWeb10B data..."
 N_SHARDS=$(ls "$DATA_DIR"/fineweb_*.bin 2>/dev/null | wc -l || echo 0)
 if [ "$N_SHARDS" -lt "$((NUM_TRAIN_SHARDS + 1))" ]; then
     echo "   Downloading $NUM_TRAIN_SHARDS train shards + 1 val shard..."
-    # Use nanoGPT downloader (shared binary format)
-    NANO_DIR="$ROOT/../nanogpt"
-    if [ -f "$NANO_DIR/data/fineweb10B/download.py" ]; then
-        python "$NANO_DIR/data/fineweb10B/download.py" "$NUM_TRAIN_SHARDS"
-        # Symlink/copy to DATA_DIR if different
-        if [ "$DATA_DIR" != "$NANO_DIR/data/fineweb10B" ]; then
-            cp -n "$NANO_DIR/data/fineweb10B"/fineweb_*.bin "$DATA_DIR/" 2>/dev/null || true
-        fi
+    if [ -f "$ROOT/download_fineweb.py" ]; then
+        python "$ROOT/download_fineweb.py" --output-dir "$DATA_DIR"
     else
-        echo "[ERROR] nanogpt/data/fineweb10B/download.py not found"
-        echo "        Run manually: cd examples/nanogpt && python data/fineweb10B/download.py $NUM_TRAIN_SHARDS"
+        echo "[ERROR] download_fineweb.py not found"
         exit 1
     fi
 fi
