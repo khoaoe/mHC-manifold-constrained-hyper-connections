@@ -64,7 +64,7 @@ if vram < 22:
 # ---------------- Download data ----------------
 echo ""
 echo "[INFO] Checking FineWeb10B data..."
-N_SHARDS=$(ls "$DATA_DIR"/fineweb_*.bin 2>/dev/null | wc -l || echo 0)
+N_SHARDS=$(ls "$DATA_DIR"/fineweb_*.bin 2>/dev/null | wc -l || true)
 if [ "$N_SHARDS" -lt "$((NUM_TRAIN_SHARDS + 1))" ]; then
     echo "   Downloading $NUM_TRAIN_SHARDS train shards + 1 val shard..."
     if [ -f "$ROOT/download_fineweb.py" ]; then
