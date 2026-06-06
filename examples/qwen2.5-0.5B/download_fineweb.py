@@ -15,6 +15,7 @@ def main():
     parser.add_argument("--output-dir", type=str, default="data/fineweb10B", help="Output directory for shards")
     parser.add_argument("--shard-size", type=int, default=100_000_000, help="Number of tokens per shard")
     parser.add_argument("--subset", type=str, default="sample-10BT", help="Dataset subset (e.g., sample-10BT)")
+    parser.add_argument("--max-shards", type=int, default=None, help="Maximum number of shards to download")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -46,6 +47,10 @@ def main():
             token_buffer = token_buffer[args.shard_size:]
             shard_idx += 1
             total_tokens += args.shard_size
+            
+            if args.max_shards is not None and shard_idx >= args.max_shards:
+                print(f"\n✅ Reached maximum requested shards ({args.max_shards}). Stopping early.")
+                return
 
     # Write remaining tokens
     if len(token_buffer) > 0:

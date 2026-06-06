@@ -19,8 +19,8 @@ NUM_TRAIN_SHARDS="${NUM_TRAIN_SHARDS:-7}"   # 7 shards là dư xăng chạy (~65
 
 # --- FINAL CONFIG CHO RTX 4090 ---
 MAX_ITERS="${MAX_ITERS:-1000}"       # Chạy 1000 bước cập nhật tạ
-BATCH_SIZE="${BATCH_SIZE:-8}"        # Nhồi 8 chuỗi vào để vắt kiệt Tensor Core
-GRAD_ACCUM="${GRAD_ACCUM:-64}"       # 8 * 64 = 512 (Effective Batch mượt như lụa)
+BATCH_SIZE="${BATCH_SIZE:-4}"        # Giảm xuống 4 vì Vocab của Qwen quá lớn (151936) gây OOM ở lớp cuối
+GRAD_ACCUM="${GRAD_ACCUM:-128}"      # 4 * 128 = 512 (Vẫn giữ nguyên Effective Batch)
 BLOCK_SIZE="${BLOCK_SIZE:-1024}"     # Vừa đủ ngữ cảnh, VRAM thở oxy khỏe re (Sequence Length)
 DTYPE="${DTYPE:-bfloat16}"
 N_STREAMS="${N_STREAMS:-4}"          # BẮT BUỘC để n=4 giữ đúng chuẩn paper
@@ -68,7 +68,7 @@ N_SHARDS=$(ls "$DATA_DIR"/fineweb_*.bin 2>/dev/null | wc -l || true)
 if [ "$N_SHARDS" -lt "$((NUM_TRAIN_SHARDS + 1))" ]; then
     echo "   Downloading $NUM_TRAIN_SHARDS train shards + 1 val shard..."
     if [ -f "$ROOT/download_fineweb.py" ]; then
-        python "$ROOT/download_fineweb.py" --output-dir "$DATA_DIR"
+        python "$ROOT/download_fineweb.py" --output-dir "$DATA_DIR" --max-shards "$((NUM_TRAIN_SHARDS + 1))"
     else
         echo "[ERROR] download_fineweb.py not found"
         exit 1
