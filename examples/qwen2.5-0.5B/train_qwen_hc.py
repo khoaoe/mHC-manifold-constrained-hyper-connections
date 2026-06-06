@@ -186,6 +186,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--weight-decay", type=float, default=0.1)
     parser.add_argument("--amax-log-interval", type=int, default=100)
     parser.add_argument("--amax-eval", type=_parse_bool, default=True)
+    parser.add_argument("--pretrained", type=_parse_bool, default=False, help="Initialize with pretrained weights for finetuning")
     return parser.parse_args()
 
 
@@ -211,6 +212,7 @@ def main() -> None:
         method=args.method,
         n_streams=args.n_streams,
         sinkhorn_tmax=args.sinkhorn_tmax,
+        pretrained=args.pretrained,
         dtype=dtype,
         device=device,
     )

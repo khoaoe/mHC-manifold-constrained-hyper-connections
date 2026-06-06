@@ -28,6 +28,7 @@ SINKHORN_TMAX="${SINKHORN_TMAX:-20}"
 AMAX_LOG_INTERVAL="${AMAX_LOG_INTERVAL:-100}"
 
 FORCE_RETRAIN="${FORCE_RETRAIN:-0}"
+PRETRAINED="${PRETRAINED:-0}"
 
 mkdir -p "$DATA_DIR" "$REPORT_DIR" "$LOG_DIR"
 
@@ -42,6 +43,7 @@ echo "BATCH x ACCUM:  ${BATCH_SIZE}x${GRAD_ACCUM} = $((BATCH_SIZE * GRAD_ACCUM))
 echo "N_STREAMS:      $N_STREAMS"
 echo "DTYPE:          $DTYPE"
 echo "FORCE_RETRAIN:  $FORCE_RETRAIN"
+echo "PRETRAINED:     $PRETRAINED"
 echo "============================================"
 
 # ---------------- GPU check ----------------
@@ -144,6 +146,7 @@ train_variant() {
         --weight-decay 0.1 \
         --amax-log-interval "$AMAX_LOG_INTERVAL" \
         --amax-eval true \
+        --pretrained "$PRETRAINED" \
         2>&1 | tee "$log_file"
 
     if ! run_finished "$out_dir"; then

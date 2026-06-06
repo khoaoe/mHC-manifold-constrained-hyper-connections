@@ -123,16 +123,18 @@ def build_qwen_hc(
     method: str = "mhc",
     n_streams: int = 4,
     sinkhorn_tmax: int = 20,
+    pretrained: bool = False,
     dtype: torch.dtype = torch.bfloat16,
     device: str = "cuda",
 ) -> Tuple[nn.Module, PreTrainedTokenizer]:
-    """Build a Qwen2.5 model with HC/mHC blocks and random weights.
+    """Build a Qwen2.5 model with HC/mHC blocks.
 
     Args:
         model_name: Hugging Face model identifier.
         method: One of {"baseline", "hc", "mhc"}.
         n_streams: Number of hyper-connection streams.
         sinkhorn_tmax: Sinkhorn-Knopp iterations for mHC.
+        pretrained: Whether to load pretrained weights.
         dtype: Torch dtype for model parameters.
         device: Target device.
 
@@ -149,8 +151,12 @@ def build_qwen_hc(
         config.torch_dtype = dtype
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    print("📥 Building model with random weights...")
-    model = AutoModelForCausalLM.from_config(config)
+    if pretrained:
+        print(f"📥 Building model with pretrained weights from {model_name}...")
+        model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype)
+    else:
+        print("📥 Building model with random weights...")
+        model = AutoModelForCausalLM.from_config(config)
     model.config.use_cache = False
 
     base_model = _get_base_model(model)
