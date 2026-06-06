@@ -21,9 +21,9 @@ NUM_TRAIN_SHARDS="${NUM_TRAIN_SHARDS:-7}"   # 7 shards là dư xăng chạy (~65
 TARGET_TOKENS="${TARGET_TOKENS:-524288000}" # ~524M tokens
 
 # --- PHẦN CỨNG RTX 4090 (Chống OOM) ---
-BATCH_SIZE="${BATCH_SIZE:-8}"        # Batch vật lý (vừa VRAM 24GB)
+BATCH_SIZE="${BATCH_SIZE:-4}"        # Batch vật lý (giảm xuống để tránh OOM)
 BLOCK_SIZE="${BLOCK_SIZE:-1024}"     # Sequence Length
-GRAD_ACCUM="${GRAD_ACCUM:-8}"        # 8 * 8 = 64 (EBS chuẩn cho model 0.5B)
+GRAD_ACCUM="${GRAD_ACCUM:-16}"       # 4 * 16 = 64 (EBS chuẩn cho model 0.5B)
 DTYPE="${DTYPE:-bfloat16}"
 N_STREAMS="${N_STREAMS:-4}"          # BẮT BUỘC để n=4 giữ đúng chuẩn paper
 SINKHORN_TMAX="${SINKHORN_TMAX:-20}"
