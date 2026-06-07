@@ -160,7 +160,7 @@ def forward_with_hc(
 
         # Attention: apply on each stream copy independently
         attn_in = attn_norm(hidden_states)
-        attn_out = _attn_forward(layer, attn_in, attention_mask, position_ids)
+        attn_out = _attn_forward(layer, base_model, attn_in, attention_mask, position_ids)
         hidden_states = hidden_states + attn_out
 
         # MLP with HC/mHC
@@ -217,18 +217,27 @@ def _build_causal_mask(
 
 
 def _maybe_get_position_embeddings(
-    layer: nn.Module, hidden_states: torch.Tensor, position_ids: torch.Tensor
+    layer: nn.Module, base_model: nn.Module, hidden_states: torch.Tensor, position_ids: torch.Tensor
 ) -> Optional[Tuple[torch.Tensor, torch.Tensor]]:
-    attn = getattr(layer, "self_attn", None)
-    if attn is None:
-        return None
-    rotary = getattr(attn, "rotary_emb", None)
+    """Lấy position embeddings (RoPE) một cách an toàn."""
+    # Trong transformers 4.51+, rotary_emb nằm ở base_model, không phải trong self_attn
+    rotary = getattr(base_model, "rotary_emb", None)
+    
+    # Fallback cho bản cũ hơn
+    if rotary is None:
+        attn = getattr(layer, "self_attn", None)
+        if attn is not None:
+            rotary = getattr(attn, "rotary_emb", None)
+
     if rotary is None:
         return None
+    
     try:
-        return rotary(hidden_states, position_ids=position_ids)
+        # Cách chuẩn cho transformers >= 4.36 (Qwen2, Llama 3, v.v.)
+        return rotary(hidden_states, position_ids)
     except TypeError:
         try:
+            # Fallback cho các phiên bản transformers cũ hơn
             return rotary(hidden_states, seq_len=hidden_states.shape[1])
         except Exception:
             return None
@@ -236,19 +245,38 @@ def _maybe_get_position_embeddings(
 
 def _attn_forward(
     layer: nn.Module,
+    base_model: nn.Module,
     attn_in: torch.Tensor,
     attention_mask: torch.Tensor,
     position_ids: torch.Tensor,
 ) -> torch.Tensor:
-    kwargs = {"attention_mask": attention_mask, "position_ids": position_ids}
-    position_embeddings = _maybe_get_position_embeddings(layer, attn_in, position_ids)
+    """Thực hiện forward pass cho attention layer của Qwen2."""
+    bsz = attn_in.shape[0]
+    if position_ids.shape[0] != bsz:
+        n_repeat = bsz // position_ids.shape[0]
+        position_ids = position_ids.repeat(n_repeat, 1)
+    if attention_mask.shape[0] != bsz:
+        n_repeat = bsz // attention_mask.shape[0]
+        attention_mask = attention_mask.repeat(n_repeat, 1, 1, 1)
+
+    position_embeddings = _maybe_get_position_embeddings(layer, base_model, attn_in, position_ids)
+    
+    kwargs = {
+        "attention_mask": attention_mask,
+        "position_ids": position_ids,
+    }
+    
+    # Nếu lấy được position embeddings, thêm vào kwargs
     if position_embeddings is not None:
         kwargs["position_embeddings"] = position_embeddings
+        
     try:
-        return layer.self_attn(attn_in, **kwargs)[0]
-    except TypeError:
-        if "position_embeddings" in kwargs or "attention_mask" in kwargs:
-            kwargs.pop("position_embeddings", None)
-            kwargs.pop("attention_mask", None)
-            return layer.self_attn(attn_in, **kwargs)[0]
+        # Qwen2Attention trả về tuple: (hidden_states, attentions, past_key_value)
+        # Chúng ta chỉ cần lấy phần tử đầu tiên (hidden_states)
+        output = layer.self_attn(attn_in, **kwargs)
+        return output[0]
+    except TypeError as e:
+        # Nếu vẫn lỗi, in ra chi tiết để debug thay vì xóa tham số mù quáng
+        print(f"❌ Lỗi khi gọi self_attn với các kwargs: {list(kwargs.keys())}")
+        print(f"❌ Chi tiết lỗi: {e}")
         raise
