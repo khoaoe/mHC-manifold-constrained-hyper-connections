@@ -281,7 +281,10 @@ def main() -> None:
 
         if use_scaler:
             scaler.unscale_(optimizer)
+            
+        pre_clip_norm = torch.norm(torch.stack([torch.norm(p.grad.detach()) for p in trainable_params if p.grad is not None]))
         grad_norm = torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+        
         if use_scaler:
             scaler.step(optimizer)
             scaler.update()
@@ -322,7 +325,8 @@ def main() -> None:
                 vram_gb = torch.cuda.max_memory_allocated() / (1024**3)
             msg = (
                 f"⚡ [{iter_num}] loss={train_loss:.4f} "
-                f"grad={float(grad_norm):.4f} lr={current_lr:.2e} vram={vram_gb:.2f}GB"
+                f"grad_pre={float(pre_clip_norm):.4f} grad_post={float(grad_norm):.4f} "
+                f"lr={current_lr:.2e} vram={vram_gb:.2f}GB"
             )
             print(msg)
 
@@ -331,7 +335,8 @@ def main() -> None:
                     "iter": float(iter_num),
                     "train_loss": float(train_loss),
                     "val_loss": float(val_loss) if val_loss is not None else float("nan"),
-                    "grad_norm": float(grad_norm),
+                    "grad_norm_post_clip": float(grad_norm),
+                    "grad_norm_pre_clip": float(pre_clip_norm),
                     "lr": float(current_lr),
                 }
             )
@@ -383,7 +388,8 @@ def main() -> None:
                 "iter",
                 "train_loss",
                 "val_loss",
-                "grad_norm",
+                "grad_norm_post_clip",
+                "grad_norm_pre_clip",
                 "lr",
             ],
         )
