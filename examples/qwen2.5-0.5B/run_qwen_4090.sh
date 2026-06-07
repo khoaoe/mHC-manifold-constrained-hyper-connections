@@ -21,9 +21,9 @@ NUM_TRAIN_SHARDS="${NUM_TRAIN_SHARDS:-7}"   # 7 shards là dư xăng chạy (~65
 TARGET_TOKENS="${TARGET_TOKENS:-524288000}" # ~524M tokens
 
 # --- PHẦN CỨNG RTX 4090 (Chống OOM) ---
-BATCH_SIZE="${BATCH_SIZE:-4}"        # Batch vật lý (giảm xuống để tránh OOM)
+BATCH_SIZE="${BATCH_SIZE:-8}"        # Batch vật lý (giảm xuống để tránh OOM)
 BLOCK_SIZE="${BLOCK_SIZE:-1024}"     # Sequence Length
-GRAD_ACCUM="${GRAD_ACCUM:-16}"       # 4 * 16 = 64 (EBS chuẩn cho model 0.5B)
+GRAD_ACCUM="${GRAD_ACCUM:-8}"       # 4 * 16 = 64 (EBS chuẩn cho model 0.5B)
 DTYPE="${DTYPE:-bfloat16}"
 N_STREAMS="${N_STREAMS:-4}"          # BẮT BUỘC để n=4 giữ đúng chuẩn paper
 SINKHORN_TMAX="${SINKHORN_TMAX:-20}"
@@ -92,9 +92,6 @@ echo "[INFO] Data shards available: $(ls "$DATA_DIR"/fineweb_*.bin | wc -l)"
 # ---------------- Helper: check if run finished ----------------
 run_finished() {
     local out_dir="$1"
-    if [ "$FORCE_RETRAIN" = "1" ] || [ "$FORCE_RETRAIN" = "true" ]; then
-        return 1
-    fi
     if [ ! -f "$out_dir/ckpt.pt" ] || [ ! -f "$out_dir/summary.json" ]; then
         return 1
     fi
@@ -120,7 +117,12 @@ train_variant() {
     echo "      Log:  $log_file"
     echo "========================================"
 
-    if run_finished "$out_dir"; then
+    local force=0
+    if [ "$FORCE_RETRAIN" = "1" ] || [ "$FORCE_RETRAIN" = "true" ]; then
+        force=1
+    fi
+
+    if [ "$force" = "0" ] && run_finished "$out_dir"; then
         echo "[SKIP] $name already complete. Set FORCE_RETRAIN=1 to rerun."
         return 0
     fi

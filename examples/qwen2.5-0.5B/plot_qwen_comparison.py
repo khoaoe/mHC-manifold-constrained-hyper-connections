@@ -90,6 +90,60 @@ def _plot_train_loss(runs: Dict[str, pd.DataFrame], output_dir: Path) -> Path:
     return path
 
 
+def _plot_train_loss_gap(runs: Dict[str, pd.DataFrame], output_dir: Path) -> Path | None:
+    if "baseline" not in runs:
+        return None
+    fig, ax = plt.subplots(figsize=(10, 6))
+    baseline_df = runs["baseline"]
+    for name, df in runs.items():
+        if "train_loss" not in df:
+            continue
+        merged = pd.merge(baseline_df[["iter", "train_loss"]], df[["iter", "train_loss"]], on="iter", suffixes=("_base", "_method"))
+        base_smoothed = _ema(merged["train_loss_base"], alpha=0.05)
+        method_smoothed = _ema(merged["train_loss_method"], alpha=0.05)
+        gap = method_smoothed - base_smoothed
+        ax.plot(
+            merged["iter"],
+            gap,
+            label=name,
+            color=COLORS.get(name, None),
+            linewidth=2,
+        )
+    ax.axhline(0.0, color="gray", linewidth=1.5)
+    ax.set_title("Absolute Training Loss Gap vs Iteration")
+    ax.set_xlabel("Iteration")
+    ax.set_ylabel("Loss Gap (Method - Baseline)")
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+    path = output_dir / "train_loss_gap_curve.png"
+    _save_fig(fig, path)
+    return path
+
+
+def _plot_grad_norm(runs: Dict[str, pd.DataFrame], output_dir: Path) -> Path:
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for name, df in runs.items():
+        if "grad_norm" not in df:
+            continue
+        ema_series = _ema(df["grad_norm"], alpha=0.1)
+        ax.plot(
+            df["iter"],
+            ema_series,
+            label=name,
+            color=COLORS.get(name, None),
+            linewidth=2,
+        )
+    ax.set_title("Gradient Norm vs Iteration")
+    ax.set_xlabel("Iteration")
+    ax.set_ylabel("Gradient Norm")
+    ax.set_ylim(bottom=0)
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+    path = output_dir / "grad_norm_curve.png"
+    _save_fig(fig, path)
+    return path
+
+
 def _plot_best_val_bar(runs: Dict[str, pd.DataFrame], output_dir: Path) -> Path:
     variants = []
     values = []
@@ -194,6 +248,13 @@ def main() -> None:
     outputs: List[Path] = []
     outputs.append(_plot_val_loss(runs, output_dir))
     outputs.append(_plot_train_loss(runs, output_dir))
+    
+    gap_path = _plot_train_loss_gap(runs, output_dir)
+    if gap_path:
+        outputs.append(gap_path)
+        
+    outputs.append(_plot_grad_norm(runs, output_dir))
+    
     outputs.append(_plot_best_val_bar(runs, output_dir))
     outputs.append(_plot_final_ppl_bar(runs, output_dir))
     outputs.append(
