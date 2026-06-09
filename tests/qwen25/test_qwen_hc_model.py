@@ -238,3 +238,49 @@ class TestBuildQwenHc:
         pytest.importorskip("transformers")
         with pytest.raises(ValueError):
             m.build_qwen_hc(method="nope")
+
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../")))
+from hyper_connections.hyper_connections import HyperConnections
+
+class TestHyperConnectionBlockMath:
+    def test_mhc_dynamic_mapping_reacts_to_input(self):
+        """
+        [CRITICAL] Đảm bảo H_res thay đổi theo input (Dynamic Mapping).
+        Nếu code bị lỗi dùng chung 1 nn.Parameter tĩnh, 2 ma trận sẽ y hệt nhau.
+        """
+        blk = HyperConnections(num_residual_streams=4, dim=16, mhc=True, sinkhorn_iters=5)
+        
+        # Tạo 2 input khác biệt hoàn toàn (batch=1, seq=1, streams=4, dim=16)
+        x1 = torch.randn(1, 1, 4, 16)
+        x2 = torch.randn(1, 1, 4, 16) * 10.0 
+        
+        blk.collect_stats = True
+        blk.width_connection(x1)
+        h_res1 = blk.last_stats['h_res_matrix']
+        blk.width_connection(x2)
+        h_res2 = blk.last_stats['h_res_matrix']
+        
+        # Chúng KHÔNG THỂ y hệt nhau
+        assert not torch.allclose(h_res1, h_res2, atol=1e-4), \
+            "❌ H_res đang bị Static! Cần fix Dynamic Mapping (Eq 7 paper)."
+
+    def test_mhc_h_pre_h_post_sigmoid_bounds(self):
+        """
+        [CRITICAL] Đảm bảo H_pre và H_post dùng Sigmoid (chặn [0,1] và [0,2]).
+        Phát hiện lỗi dùng Softmax hoặc Unconstrained Linear.
+        """
+        blk = HyperConnections(num_residual_streams=4, dim=16, mhc=True)
+        blk.collect_stats = True
+        
+        # Input cực lớn để ép Sigmoid bão hòa
+        x = torch.randn(2, 1, 4, 16) * 100.0 
+        
+        blk.width_connection(x)
+        stats = blk.last_stats
+        
+        assert stats['h_pre_max'] <= 1.0 + 1e-4, "H_pre > 1.0: Có thể đang dùng Unconstrained"
+        assert stats['h_pre_min'] >= 0.0 - 1e-4, "H_pre < 0.0: Có thể đang dùng Unconstrained"
+        if 'h_post_max' in stats:
+            assert stats['h_post_max'] <= 2.0 + 1e-4, "H_post > 2.0: Sai hệ số nhân Sigmoid"

@@ -30,6 +30,9 @@ def fake_run(tmp_path: Path) -> Path:
         "amax_bwd_mean": 1.0,
         "peak_vram_gb": 12.5,
         "elapsed_s": 3600.0,
+        "avg_attn_entropy": 1.25,
+        "residual_norm_final": 14.2,
+        "hc_grad_norm_pre_clip": 2.45,
     }
     (run_dir / "summary.json").write_text(json.dumps(summary))
     return run_dir
@@ -128,3 +131,15 @@ class TestMain:
         )
         with pytest.raises(FileNotFoundError):
             s.main()
+
+class TestNewMetricsInCSV:
+    def test_csv_contains_new_metrics(self, fake_run: Path, tmp_path: Path, monkeypatch):
+        out_dir = tmp_path / "report"
+        monkeypatch.setattr("sys.argv", [
+            "summarize_qwen_runs.py", "--runs", f"baseline={fake_run}",
+            "--output-dir", str(out_dir),
+        ])
+        s.main()
+        csv_text = (out_dir / "training_summary.csv").read_text()
+        assert "avg_attn_entropy" in csv_text
+        assert "1.25" in csv_text or "1.2500" in csv_text
