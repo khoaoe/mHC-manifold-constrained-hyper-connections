@@ -20,7 +20,7 @@ NUM_TRAIN_SHARDS="${NUM_TRAIN_SHARDS:-7}"   # 7 shards là dư xăng chạy (~65
 # --- MỤC TIÊU DỮ LIỆU ---
 TARGET_TOKENS="${TARGET_TOKENS:-524288000}" # ~524M tokens
 
-# --- PHẦN CỨNG RTX 4090 (Chống OOM) ---
+# --- PHẦN CỨNG RTX 5090 (Chống OOM) ---
 BATCH_SIZE="${BATCH_SIZE:-4}"        # Batch vật lý (giảm xuống để tránh OOM)
 BLOCK_SIZE="${BLOCK_SIZE:-1024}"     # Sequence Length
 GRAD_ACCUM="${GRAD_ACCUM:-16}"       # 4 * 16 = 64 (EBS chuẩn cho model 0.5B)
