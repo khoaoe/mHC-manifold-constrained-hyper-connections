@@ -43,7 +43,7 @@ Repository = "https://github.com/tokenbender/mHC-manifold-constrained-hyper-conn
 [project.optional-dependencies]
 examples = [
     "huggingface-hub>=0.20.0",
-    "transformers>=4.40.0",
+    "transformers>=4.40.0,<4.52.0",
     "datasets>=2.14.0",
     "accelerate>=0.26.0",
 ]

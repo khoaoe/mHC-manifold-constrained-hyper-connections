@@ -347,14 +347,29 @@ class HyperConnections(Module):
 
             H_res_init = torch.full((num_residual_streams, num_residual_streams), -8.0)
             H_res_init.fill_diagonal_(0.0)
-            self.H_res_logits = nn.Parameter(H_res_init)
+            self.b_res = nn.Parameter(H_res_init)
 
             H_pre_init = torch.full((num_residual_streams,), -8.0)
             H_pre_init[init_residual_index] = 0.0
-            self.H_pre_logits = nn.Parameter(H_pre_init)
+            self.b_pre = nn.Parameter(H_pre_init)
 
             if add_branch_out_to_residual:
-                self.H_post_logits = nn.Parameter(torch.zeros(num_residual_streams))
+                self.b_post = nn.Parameter(torch.zeros(num_residual_streams))
+
+            # Linear projections (Eq 7)
+            self.phi_pre = nn.Linear(dim * num_residual_streams, num_residual_streams, bias=False)
+            self.phi_res = nn.Linear(dim * num_residual_streams, num_residual_streams**2, bias=False)
+            
+            # Learnable scalars (Eq 7)
+            self.alpha_pre = nn.Parameter(torch.tensor(0.01))
+            self.alpha_res = nn.Parameter(torch.tensor(0.01))
+            
+            if add_branch_out_to_residual:
+                self.phi_post = nn.Linear(dim * num_residual_streams, num_residual_streams, bias=False)
+                self.alpha_post = nn.Parameter(torch.tensor(0.01))
+                
+            # Input RMSNorm
+            self.mhc_input_rms = RMSNorm(dim * num_residual_streams)
 
             if mhc_residual_identity_mix:
                 alpha_clamped = max(1e-4, min(1 - 1e-4, mhc_residual_alpha))
@@ -394,15 +409,30 @@ class HyperConnections(Module):
                 residuals_mixed_source, "(b s) ... d -> b ... s d", s=streams
             )
 
+            # 1. Chuẩn bị input đại diện cho layer (flatten streams & dim)
+            x_rep = rearrange(residuals, '... s d -> ... (s d)')
+            x_normed = self.mhc_input_rms(x_rep)
+
+            # 2. Dynamic Mapping (Eq 7 / Eq 8 DeepSeek mHC paper)
+            h_pre_tilde = self.alpha_pre * self.phi_pre(x_normed) + self.b_pre
+            h_res_tilde = self.alpha_res * self.phi_res(x_normed).unflatten(-1, (streams, streams)) + self.b_res
+
+            H_pre = torch.sigmoid(h_pre_tilde)
+            
+            H_post = None
+            if self.add_branch_out_to_residual:
+                h_post_tilde = self.alpha_post * self.phi_post(x_normed) + self.b_post
+                H_post = 2.0 * torch.sigmoid(h_post_tilde)
+
             if self.mhc_h_res_proj == "orthostochastic":
                 S = orthostochastic_project(
-                    self.H_res_logits,
+                    h_res_tilde,
                     ns_steps=self.ns_steps,
                     ns_eps=self.ns_eps,
                     ns_coeffs=self.ns_coeffs,
                 )
             else:
-                S = sinkhorn_log(self.H_res_logits, self.sinkhorn_iters, self.sinkhorn_tau)
+                S = sinkhorn_log(h_res_tilde, self.sinkhorn_iters, self.sinkhorn_tau)
 
             if self.mhc_residual_identity_mix:
                 alpha = torch.sigmoid(self.H_res_alpha_logit)
@@ -411,16 +441,10 @@ class HyperConnections(Module):
             else:
                 H_res = S
 
-            H_pre = F.softmax(self.H_pre_logits, dim=-1)
-
-            H_post = None
-            if self.add_branch_out_to_residual:
-                H_post = F.softmax(self.H_post_logits, dim=-1)
-
             residuals_mixed = einsum(
-                H_res, residuals_mixed_source, "s t, ... s d -> ... t d"
+                H_res, residuals_mixed_source, "... s t, ... s d -> ... t d"
             )
-            branch_input = einsum(H_pre, residuals, "s, ... s d -> ... d")
+            branch_input = einsum(H_pre, residuals, "... s, ... s d -> ... d")
 
             if getattr(self, "collect_stats", False):
                 with torch.no_grad():
@@ -554,7 +578,8 @@ class HyperConnections(Module):
             assert residuals_mixed is not None
             assert beta is not None
 
-            branch_to_streams = einsum(branch_output, beta, "b ... d, s -> b ... s d")
+            # Eq 8 (DeepSeek mHC paper)
+            branch_to_streams = einsum(branch_output, beta, "... d, ... s -> ... s d")
             output = residuals_mixed + branch_to_streams
             output = rearrange(output, "b ... s d -> (b s) ... d")
 
