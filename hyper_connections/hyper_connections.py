@@ -453,6 +453,7 @@ class HyperConnections(Module):
                         h_res_row_sum=H_res.sum(dim=-1).mean(),
                         h_res_col_sum=H_res.sum(dim=-2).mean(),
                         h_pre_min=H_pre.min(),
+                        h_res_matrix=H_res.mean(dim=(0, 1)),
                     )
                     if H_post is not None:
                         stats["h_post_min"] = H_post.min()

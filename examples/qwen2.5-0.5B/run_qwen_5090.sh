@@ -21,7 +21,7 @@ NUM_TRAIN_SHARDS="${NUM_TRAIN_SHARDS:-7}"   # 7 shards là dư xăng chạy (~65
 TARGET_TOKENS="${TARGET_TOKENS:-524288000}" # ~524M tokens
 
 # --- PHẦN CỨNG RTX 5090 (Chống OOM) ---
-BATCH_SIZE="${BATCH_SIZE:-4}"        # Batch vật lý (giảm xuống để tránh OOM)
+BATCH_SIZE="${BATCH_SIZE:-4}"        # Batch vật lý (tăng lên 8 nhờ tắt Frac-Connections)
 BLOCK_SIZE="${BLOCK_SIZE:-1024}"     # Sequence Length
 GRAD_ACCUM="${GRAD_ACCUM:-16}"       # 4 * 16 = 64 (EBS chuẩn cho model 0.5B)
 DTYPE="${DTYPE:-bfloat16}"
@@ -134,10 +134,7 @@ train_variant() {
 
     mkdir -p "$out_dir"
 
-    local num_fracs=1
-    if [ "$method" = "hc" ]; then
-        num_fracs=2
-    fi
+    local num_fracs=1  # Ép cả HC và mHC đều tắt Frac-Connections
 
     # Use stdbuf for realtime logging and tee to file
     stdbuf -oL -eL python -u train_qwen_hc.py \

@@ -169,6 +169,11 @@ def forward_with_hc(
         branch_output = layer.mlp(branch_input)
         hidden_states = add_residual_fn(branch_output)
 
+        if getattr(model, "collect_metrics", False):
+            if not hasattr(model, "_residual_norms"):
+                model._residual_norms = []
+            model._residual_norms.append(hidden_states.norm(p=2, dim=-1).mean().item())
+
     # Reduce multi-stream back to single stream
     hidden_states = model._hc_reduce(hidden_states)
 
@@ -264,6 +269,7 @@ def _attn_forward(
     kwargs = {
         "attention_mask": attention_mask,
         "position_ids": position_ids,
+        "output_attentions": getattr(base_model.config, "output_attentions", False),
     }
     
     # Nếu lấy được position embeddings, thêm vào kwargs
@@ -274,6 +280,10 @@ def _attn_forward(
         # Qwen2Attention trả về tuple: (hidden_states, attentions, past_key_value)
         # Chúng ta chỉ cần lấy phần tử đầu tiên (hidden_states)
         output = layer.self_attn(attn_in, **kwargs)
+        if kwargs["output_attentions"] and len(output) > 1 and output[1] is not None:
+            if not hasattr(base_model, "_attn_weights"):
+                base_model._attn_weights = []
+            base_model._attn_weights.append(output[1].detach())
         return output[0]
     except TypeError as e:
         # Nếu vẫn lỗi, in ra chi tiết để debug thay vì xóa tham số mù quáng

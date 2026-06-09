@@ -16,6 +16,7 @@ import numpy as np
 import torch
 
 from qwen_hc_model import build_qwen_hc, forward_with_hc
+from metrics_collector import PaperMetricsCollector
 
 DTYPE_MAP: Dict[str, torch.dtype] = {
     "bfloat16": torch.bfloat16,
@@ -125,13 +126,18 @@ def _evaluate(
     eval_iters: int,
     device: str,
     dtype: torch.dtype,
-) -> Tuple[float, float]:
+) -> Dict[str, float]:
     model.eval()
     losses: List[float] = []
 
     autocast_ctx = _get_autocast_context(device, dtype)
+    
+    n_streams = model.hc_blocks[0].num_residual_streams if hasattr(model, "hc_blocks") and model.hc_blocks else 4
+    collector = PaperMetricsCollector(model, n_streams)
+    metrics = {}
+    
     with torch.no_grad():
-        for _ in range(eval_iters):
+        for i in range(eval_iters):
             x, y = load_fineweb_batch(
                 data_dir=data_dir,
                 split="val",
@@ -139,14 +145,26 @@ def _evaluate(
                 batch_size=batch_size,
                 device=device,
             )
+            
+            if i == 0:
+                collector.enable_collection()
+                
             with autocast_ctx:
                 loss = forward_with_hc(model, x, y)
+                
+            if i == 0:
+                metrics = collector.compute_metrics()
+                collector.disable_collection()
+                
             losses.append(loss.item())
 
     val_loss = float(np.mean(losses)) if losses else float("nan")
     val_ppl = math.exp(val_loss) if val_loss < 20 else float("inf")
+    
+    metrics["val_loss"] = val_loss
+    metrics["val_ppl"] = val_ppl
 
-    return val_loss, val_ppl
+    return metrics
 
 
 def _parse_args() -> argparse.Namespace:
@@ -244,8 +262,7 @@ def main() -> None:
     autocast_ctx = _get_autocast_context(device, dtype)
 
     best_val_loss = float("inf")
-    last_val_loss = float("nan")
-    last_val_ppl = float("nan")
+    last_val_metrics = {}
     history_rows: List[Dict[str, float]] = []
 
     start_time = time.time()
@@ -282,6 +299,12 @@ def main() -> None:
         if use_scaler:
             scaler.unscale_(optimizer)
             
+        hc_params = [p for n, p in model.named_parameters() if p.requires_grad and 'hc_blocks' in n]
+        base_params = [p for n, p in model.named_parameters() if p.requires_grad and 'hc_blocks' not in n]
+        
+        pre_clip_hc = torch.norm(torch.stack([torch.norm(p.grad.detach()) for p in hc_params if p.grad is not None])) if hc_params else torch.tensor(0.0)
+        pre_clip_base = torch.norm(torch.stack([torch.norm(p.grad.detach()) for p in base_params if p.grad is not None])) if base_params else torch.tensor(0.0)
+        
         pre_clip_norm = torch.norm(torch.stack([torch.norm(p.grad.detach()) for p in trainable_params if p.grad is not None]))
         grad_norm = torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
         
@@ -293,11 +316,9 @@ def main() -> None:
 
         train_loss = train_loss_sum / args.grad_accum
 
-        val_loss = None
-        val_ppl = None
         if iter_num % args.eval_interval == 0 or iter_num == args.max_iters:
             print("✅ Running eval...")
-            val_loss, val_ppl = _evaluate(
+            last_val_metrics = _evaluate(
                 model=model,
                 data_dir=args.data_dir,
                 block_size=args.block_size,
@@ -306,15 +327,13 @@ def main() -> None:
                 device=device,
                 dtype=dtype,
             )
-            last_val_loss = val_loss
-            last_val_ppl = val_ppl
 
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
+            if last_val_metrics["val_loss"] < best_val_loss:
+                best_val_loss = last_val_metrics["val_loss"]
                 ckpt = {
                     "model_state": model.state_dict(),
                     "iter_num": iter_num,
-                    "val_loss": val_loss,
+                    "val_loss": best_val_loss,
                 }
                 torch.save(ckpt, out_dir / "ckpt.pt")
                 print("✅ Saved new best checkpoint")
@@ -334,15 +353,22 @@ def main() -> None:
                 {
                     "iter": float(iter_num),
                     "train_loss": float(train_loss),
-                    "val_loss": float(val_loss) if val_loss is not None else float("nan"),
+                    "val_loss": float(last_val_metrics.get("val_loss", float("nan"))),
                     "grad_norm_post_clip": float(grad_norm),
                     "grad_norm_pre_clip": float(pre_clip_norm),
+                    "grad_norm_hc": float(pre_clip_hc),
+                    "grad_norm_base": float(pre_clip_base),
                     "lr": float(current_lr),
+                    "amax_fwd_max": float(last_val_metrics.get("amax_fwd_max", 1.0)),
+                    "amax_bwd_max": float(last_val_metrics.get("amax_bwd_max", 1.0)),
+                    "h_res_row_sum_max_dev": float(last_val_metrics.get("h_res_row_sum_max_dev", 0.0)),
+                    "avg_attn_entropy": float(last_val_metrics.get("avg_attn_entropy", 0.0)),
+                    "residual_norm_final": float(last_val_metrics.get("residual_norm_final", 0.0)),
                 }
             )
 
-    if math.isnan(last_val_loss):
-        val_loss, val_ppl = _evaluate(
+    if "val_loss" not in last_val_metrics or math.isnan(last_val_metrics["val_loss"]):
+        last_val_metrics = _evaluate(
             model=model,
             data_dir=args.data_dir,
             block_size=args.block_size,
@@ -351,8 +377,6 @@ def main() -> None:
             device=device,
             dtype=dtype,
         )
-        last_val_loss = val_loss
-        last_val_ppl = val_ppl
 
     peak_vram_gb = 0.0
     if device.startswith("cuda"):
@@ -366,8 +390,8 @@ def main() -> None:
         "iter_num": args.max_iters,
         "best_val_loss": float(best_val_loss),
         "final_train_loss": float(train_loss),
-        "final_val_loss": float(last_val_loss),
-        "final_val_ppl": float(last_val_ppl),
+        "final_val_loss": float(last_val_metrics.get("val_loss", float("nan"))),
+        "final_val_ppl": float(last_val_metrics.get("val_ppl", float("nan"))),
         "peak_vram_gb": float(peak_vram_gb),
         "elapsed_s": float(elapsed_s),
         "tokens_per_step": tokens_per_step,
@@ -376,6 +400,7 @@ def main() -> None:
         "lr_max": lr_max,
         "lr_min": lr_min,
     }
+    summary.update({k: float(v) for k, v in last_val_metrics.items() if isinstance(v, (int, float))})
 
     with open(out_dir / "summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
@@ -390,7 +415,14 @@ def main() -> None:
                 "val_loss",
                 "grad_norm_post_clip",
                 "grad_norm_pre_clip",
+                "grad_norm_hc",
+                "grad_norm_base",
                 "lr",
+                "amax_fwd_max",
+                "amax_bwd_max",
+                "h_res_row_sum_max_dev",
+                "avg_attn_entropy",
+                "residual_norm_final",
             ],
         )
         writer.writeheader()
