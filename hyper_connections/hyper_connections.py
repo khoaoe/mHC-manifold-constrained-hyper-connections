@@ -48,20 +48,21 @@ def add(x, y):
 
 
 def sinkhorn_log(logits, num_iters=10, tau=0.05):
+    """Batched Sinkhorn-Knopp in log-space. Supports shape [..., n, n]."""
     n = logits.shape[-1]
     Z = logits / tau
-    log_marginal = torch.full(
-        (n,), -math.log(n), device=logits.device, dtype=logits.dtype
-    )
-
-    u = torch.zeros(n, device=Z.device, dtype=Z.dtype)
-    v = torch.zeros(n, device=Z.device, dtype=Z.dtype)
+    log_marginal = torch.full((n,), -math.log(n), device=logits.device, dtype=logits.dtype)
+    
+    # Khởi tạo u, v với shape giống hệt Z nhưng bỏ đi 2 chiều cuối (tức là [..., n])
+    u = torch.zeros(logits.shape[:-1], device=Z.device, dtype=Z.dtype)
+    v = torch.zeros_like(u)
 
     for _ in range(num_iters):
-        u = log_marginal - torch.logsumexp(Z + v.unsqueeze(0), dim=1)
-        v = log_marginal - torch.logsumexp(Z + u.unsqueeze(1), dim=0)
+        #unsqueeze(-2) và unsqueeze(-1) để broadcast chuẩn xác cho mọi chiều batch/seq
+        u = log_marginal - torch.logsumexp(Z + v.unsqueeze(-2), dim=-1)
+        v = log_marginal - torch.logsumexp(Z + u.unsqueeze(-1), dim=-2)
 
-    return torch.exp(Z + u.unsqueeze(1) + v.unsqueeze(0)) * n
+    return torch.exp(Z + u.unsqueeze(-1) + v.unsqueeze(-2)) * n
 
 
 def zeropower_via_newtonschulz(X, steps=5, eps=1e-7, coeffs=(3.0, -3.2, 1.2)):
@@ -356,20 +357,24 @@ class HyperConnections(Module):
             if add_branch_out_to_residual:
                 self.b_post = nn.Parameter(torch.zeros(num_residual_streams))
 
-            # Linear projections (Eq 7)
-            self.phi_pre = nn.Linear(dim * num_residual_streams, num_residual_streams, bias=False)
+            # RMSNorm cho vector gộp (n * C)
+            self.input_rms = RMSNorm(dim * num_residual_streams)
+
+            # Projections cho H_res (ma trận n x n)
             self.phi_res = nn.Linear(dim * num_residual_streams, num_residual_streams**2, bias=False)
-            
-            # Learnable scalars (Eq 7)
-            self.alpha_pre = nn.Parameter(torch.tensor(0.01))
+            nn.init.zeros_(self.phi_res.weight) # Init 0 để ban đầu nó phụ thuộc hoàn toàn vào bias
             self.alpha_res = nn.Parameter(torch.tensor(0.01))
-            
+
+            # Projections cho H_pre (vector n)
+            self.phi_pre = nn.Linear(dim * num_residual_streams, num_residual_streams, bias=False)
+            nn.init.zeros_(self.phi_pre.weight)
+            self.alpha_pre = nn.Parameter(torch.tensor(0.01))
+
+            # Projections cho H_post (vector n)
             if add_branch_out_to_residual:
                 self.phi_post = nn.Linear(dim * num_residual_streams, num_residual_streams, bias=False)
+                nn.init.zeros_(self.phi_post.weight)
                 self.alpha_post = nn.Parameter(torch.tensor(0.01))
-                
-            # Input RMSNorm
-            self.mhc_input_rms = RMSNorm(dim * num_residual_streams)
 
             if mhc_residual_identity_mix:
                 alpha_clamped = max(1e-4, min(1 - 1e-4, mhc_residual_alpha))
@@ -409,42 +414,59 @@ class HyperConnections(Module):
                 residuals_mixed_source, "(b s) ... d -> b ... s d", s=streams
             )
 
-            # 1. Chuẩn bị input đại diện cho layer (flatten streams & dim)
-            x_rep = rearrange(residuals, '... s d -> ... (s d)')
-            x_normed = self.mhc_input_rms(x_rep)
-
-            # 2. Dynamic Mapping (Eq 7 / Eq 8 DeepSeek mHC paper)
-            h_pre_tilde = self.alpha_pre * self.phi_pre(x_normed) + self.b_pre
-            h_res_tilde = self.alpha_res * self.phi_res(x_normed).unflatten(-1, (streams, streams)) + self.b_res
-
-            H_pre = torch.sigmoid(h_pre_tilde)
+            # 1. TÍNH DYNAMIC MAPPING (Eq 7)
+            b = residuals.shape[0]
             
-            H_post = None
-            if self.add_branch_out_to_residual:
-                h_post_tilde = self.alpha_post * self.phi_post(x_normed) + self.b_post
-                H_post = 2.0 * torch.sigmoid(h_post_tilde)
-
+            # Gộp streams và dim lại để làm input cho Dynamic Routing
+            x_flat = rearrange(residuals, 'b ... s d -> b ... (s d)')
+            x_normed = self.input_rms(x_flat)
+            
+            # Dynamic H_res -> Shape: (b, ..., n, n)
+            dyn_res = self.phi_res(x_normed)
+            
+            # Áp dụng hàm mat() - reshape (b, ..., n^2) thành (b, ..., n, n)
+            dyn_res = rearrange(dyn_res, '... (s1 s2) -> ... s1 s2', s1=streams, s2=streams)
+            
+            h_res_tilde = self.alpha_res * dyn_res + self.b_res
+            
             if self.mhc_h_res_proj == "orthostochastic":
+                # Flatten để ném vào orthostochastic (hàm này có thể chỉ support 2D hoặc 3D)
+                h_res_flat = rearrange(h_res_tilde, 'b ... s1 s2 -> (b ...) s1 s2')
                 S = orthostochastic_project(
-                    h_res_tilde,
+                    h_res_flat,
                     ns_steps=self.ns_steps,
                     ns_eps=self.ns_eps,
                     ns_coeffs=self.ns_coeffs,
                 )
+                H_res = rearrange(S, '(b ...) s1 s2 -> b ... s1 s2', b=b) # Shape: (b, ..., n, n)
             else:
-                S = sinkhorn_log(h_res_tilde, self.sinkhorn_iters, self.sinkhorn_tau)
-
+                H_res = sinkhorn_log(h_res_tilde, self.sinkhorn_iters, self.sinkhorn_tau)
+            
             if self.mhc_residual_identity_mix:
                 alpha = torch.sigmoid(self.H_res_alpha_logit)
-                I = torch.eye(streams, device=S.device, dtype=S.dtype)
-                H_res = (1 - alpha) * I + alpha * S
-            else:
-                H_res = S
+                I = torch.eye(streams, device=H_res.device, dtype=H_res.dtype)
+                H_res = (1 - alpha) * I + alpha * H_res
 
+            # Dynamic H_pre -> Shape: (b, ..., n) - Dùng SIGMOID (Eq 8)
+            dyn_pre = self.phi_pre(x_normed)
+            h_pre_tilde = self.alpha_pre * dyn_pre + self.b_pre
+            H_pre = torch.sigmoid(h_pre_tilde) 
+            
+            # Dynamic H_post -> Shape: (b, ..., n) - Dùng SIGMOID * 2 (Eq 8)
+            H_post = None
+            if self.add_branch_out_to_residual:
+                dyn_post = self.phi_post(x_normed)
+                h_post_tilde = self.alpha_post * dyn_post + self.b_post
+                H_post = 2.0 * torch.sigmoid(h_post_tilde)
+
+            # 2. CẬP NHẬT EINSUM ĐỂ HỖ TRỢ BATCHED DYNAMIC ROUTING
+            # residuals_mixed_source đang là (b, ..., s, d)
             residuals_mixed = einsum(
-                H_res, residuals_mixed_source, "... s t, ... s d -> ... t d"
+                H_res, residuals_mixed_source, "b ... s t, b ... s d -> b ... t d"
             )
-            branch_input = einsum(H_pre, residuals, "... s, ... s d -> ... d")
+            
+            # residuals đang là (b, ..., s, d)
+            branch_input = einsum(H_pre, residuals, "b ... s, b ... s d -> b ... d")
 
             if getattr(self, "collect_stats", False):
                 with torch.no_grad():
@@ -582,7 +604,7 @@ class HyperConnections(Module):
             assert beta is not None
 
             # Eq 8 (DeepSeek mHC paper)
-            branch_to_streams = einsum(branch_output, beta, "... d, ... s -> ... s d")
+            branch_to_streams = einsum(branch_output, beta, "b ... d, b ... s -> b ... s d")
             output = residuals_mixed + branch_to_streams
             output = rearrange(output, "b ... s d -> (b s) ... d")
 

@@ -79,6 +79,9 @@ def main() -> None:
                 "iter_num": int(summary.get("iter_num", 0)),
                 "elapsed_s": float(summary.get("elapsed_s", float("nan"))),
                 "peak_vram_gb": float(summary.get("peak_vram_gb", float("nan"))),
+                "avg_attn_entropy": float(summary.get("avg_attn_entropy", float("nan"))),
+                "residual_norm_final": float(summary.get("residual_norm_final", float("nan"))),
+                "hc_grad_norm_pre_clip": float(summary.get("hc_grad_norm_pre_clip", float("nan"))),
             }
         )
 
@@ -97,6 +100,9 @@ def main() -> None:
         "iter_num",
         "elapsed_s",
         "peak_vram_gb",
+        "avg_attn_entropy",
+        "residual_norm_final",
+        "hc_grad_norm_pre_clip",
     ]
 
     csv_path = output_dir / "training_summary.csv"
