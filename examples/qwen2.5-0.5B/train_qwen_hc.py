@@ -45,9 +45,9 @@ def _set_seed(seed: int) -> None:
 
 
 def _list_shards(data_dir: Path) -> List[Path]:
-    shards = sorted(data_dir.glob("fineweb_*.bin"))
+    shards = sorted(data_dir.glob("tinystories_*.bin"))
     if not shards:
-        raise FileNotFoundError(f"No fineweb_*.bin shards found in {data_dir}")
+        raise FileNotFoundError(f"No tinystories_*.bin shards found in {data_dir}")
     return shards
 
 

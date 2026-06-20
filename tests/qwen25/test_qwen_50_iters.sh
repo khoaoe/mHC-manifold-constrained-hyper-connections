@@ -8,7 +8,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-QWEN_DIR="$ROOT/../examples/qwen2.5-0.5B"
+QWEN_DIR="$ROOT/../../examples/qwen2.5-0.5B"
 cd "$QWEN_DIR"
 
 # ---------------- Config ----------------
