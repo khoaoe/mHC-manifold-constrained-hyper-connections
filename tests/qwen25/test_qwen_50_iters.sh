@@ -12,7 +12,7 @@ QWEN_DIR="$ROOT/../examples/qwen2.5-0.5B"
 cd "$QWEN_DIR"
 
 # ---------------- Config ----------------
-DATA_DIR="$QWEN_DIR/data/fineweb10B"
+DATA_DIR="$QWEN_DIR/data/tinystories"
 REPORT_DIR="$ROOT/reports/test-50-iters"
 LOG_DIR="$ROOT/logs"
 

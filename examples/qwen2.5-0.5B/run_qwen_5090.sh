@@ -12,7 +12,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 # ---------------- Config ----------------
-DATA_DIR="$ROOT/data/fineweb10B"
+DATA_DIR="$ROOT/data/tinystories"
 REPORT_DIR="$ROOT/reports/qwen-4090-full"
 LOG_DIR="$ROOT/logs"
 NUM_TRAIN_SHARDS="${NUM_TRAIN_SHARDS:-7}"   # 7 shards là dư xăng chạy (~655M tokens)
@@ -76,18 +76,18 @@ if vram < 22:
 
 # ---------------- Download data ----------------
 echo ""
-echo "[INFO] Checking FineWeb10B data..."
-N_SHARDS=$(ls "$DATA_DIR"/fineweb_*.bin 2>/dev/null | wc -l || true)
+echo "[INFO] Checking TinyStories data..."
+N_SHARDS=$(ls "$DATA_DIR"/tinystories_*.bin 2>/dev/null | wc -l || true)
 if [ "$N_SHARDS" -lt "$((NUM_TRAIN_SHARDS + 1))" ]; then
     echo "   Downloading $NUM_TRAIN_SHARDS train shards + 1 val shard..."
-    if [ -f "$ROOT/download_fineweb.py" ]; then
-        python "$ROOT/download_fineweb.py" --output-dir "$DATA_DIR" --max-shards "$((NUM_TRAIN_SHARDS + 1))"
+    if [ -f "$ROOT/download_tinystories.py" ]; then
+        python "$ROOT/download_tinystories.py" --output-dir "$DATA_DIR" --max-shards "$((NUM_TRAIN_SHARDS + 1))"
     else
-        echo "[ERROR] download_fineweb.py not found"
+        echo "[ERROR] download_tinystories.py not found"
         exit 1
     fi
 fi
-echo "[INFO] Data shards available: $(ls "$DATA_DIR"/fineweb_*.bin | wc -l)"
+echo "[INFO] Data shards available: $(ls "$DATA_DIR"/tinystories_*.bin | wc -l)"
 
 # ---------------- Helper: check if run finished ----------------
 run_finished() {
