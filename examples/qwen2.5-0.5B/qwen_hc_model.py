@@ -81,12 +81,12 @@ def build_qwen_hc(
                 HyperConnections(
                     num_residual_streams=n_streams,
                     dim=hidden_size,
-                    layer_index=i,
+                    layer_index=j,  # j runs from 0 to 2*num_layers - 1
                     mhc=(method == "mhc"),
                     sinkhorn_iters=sinkhorn_tmax,
                     num_fracs=num_fracs,
                 )
-                for i in range(num_layers)
+                for j in range(2 * num_layers)  # 2 blocks per layer: Attn + MLP
             ]
         )
         hc_params = sum(p.numel() for p in model.hc_blocks.parameters())
@@ -158,17 +158,37 @@ def forward_with_hc(
         if attn_norm is None or ffn_norm is None:
             raise AttributeError("Could not locate layer norms for attention/MLP.")
 
-        # Attention: apply on each stream copy independently
-        attn_in = attn_norm(hidden_states)
+        # ---------------------------------------------------------
+        # BRANCH 1: ATTENTION with HC/mHC (layer_index = 2 * i)
+        # ---------------------------------------------------------
+        # 1. Extract single-stream from multi-stream highway (hidden_states stays un-normalized)
+        branch_attn_in, add_attn_residual_fn = model.hc_blocks[2 * i](hidden_states)
+
+        # 2. Apply Pre-Norm ON THE SINGLE-STREAM branch (mathematically correct)
+        attn_in = attn_norm(branch_attn_in)
+
+        # 3. Run Attention on base batch -> VRAM-friendly
         attn_out = _attn_forward(layer, base_model, attn_in, attention_mask, position_ids)
-        hidden_states = hidden_states + attn_out
 
-        # MLP with HC/mHC
-        ffn_in = ffn_norm(hidden_states)
-        branch_input, add_residual_fn = model.hc_blocks[i](ffn_in)
-        branch_output = layer.mlp(branch_input)
-        hidden_states = add_residual_fn(branch_output)
+        # 4. Write back to multi-stream highway (mix via H_res)
+        hidden_states = add_attn_residual_fn(attn_out)
 
+        # ---------------------------------------------------------
+        # BRANCH 2: FFN / MLP with HC/mHC (layer_index = 2 * i + 1)
+        # ---------------------------------------------------------
+        # 1. Extract single-stream for MLP
+        branch_mlp_in, add_mlp_residual_fn = model.hc_blocks[2 * i + 1](hidden_states)
+
+        # 2. Apply Pre-Norm ON THE SINGLE-STREAM branch
+        ffn_in = ffn_norm(branch_mlp_in)
+
+        # 3. Run MLP on base batch
+        mlp_out = layer.mlp(ffn_in)
+
+        # 4. Write back to multi-stream highway
+        hidden_states = add_mlp_residual_fn(mlp_out)
+
+        # Collect metrics
         if getattr(model, "collect_metrics", False):
             if not hasattr(model, "_residual_norms"):
                 model._residual_norms = []
