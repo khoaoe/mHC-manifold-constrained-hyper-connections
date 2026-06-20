@@ -78,15 +78,15 @@ if vram < 22:
 echo ""
 echo "[INFO] Checking TinyStories data..."
 N_SHARDS=$(ls "$DATA_DIR"/tinystories_*.bin 2>/dev/null | wc -l || true)
-if [ "$N_SHARDS" -lt "$((NUM_TRAIN_SHARDS + 1))" ]; then
-    echo "   Downloading $NUM_TRAIN_SHARDS train shards + 1 val shard..."
-    if [ -f "$ROOT/download_tinystories.py" ]; then
-        python "$ROOT/download_tinystories.py" --output-dir "$DATA_DIR" --max-shards "$((NUM_TRAIN_SHARDS + 1))"
-    else
-        echo "[ERROR] download_tinystories.py not found"
-        exit 1
-    fi
-fi
+# if [ "$N_SHARDS" -lt "$((NUM_TRAIN_SHARDS + 1))" ]; then
+#     echo "   Downloading $NUM_TRAIN_SHARDS train shards + 1 val shard..."
+#     if [ -f "$ROOT/download_tinystories.py" ]; then
+#         python "$ROOT/download_tinystories.py" --output-dir "$DATA_DIR" --max-shards "$((NUM_TRAIN_SHARDS + 1))"
+#     else
+#         echo "[ERROR] download_tinystories.py not found"
+#         exit 1
+#     fi
+# fi
 echo "[INFO] Data shards available: $(ls "$DATA_DIR"/tinystories_*.bin | wc -l)"
 
 # ---------------- Helper: check if run finished ----------------

@@ -261,7 +261,7 @@ def main() -> None:
         _plot_amax_curve(
             runs,
             output_dir,
-            col="amax_fwd",
+            col="amax_fwd_max",
             filename="amax_fwd_curve.png",
             title="Amax Forward Gain vs Iteration",
         )
@@ -270,7 +270,7 @@ def main() -> None:
         _plot_amax_curve(
             runs,
             output_dir,
-            col="amax_bwd",
+            col="amax_bwd_max",
             filename="amax_bwd_curve.png",
             title="Amax Backward Gain vs Iteration",
         )

@@ -237,3 +237,4 @@ examples/qwen2.5-0.5B/data/fineweb10B/fineweb_00000.bin
 
 
 examples/qwen2.5-0.5B/out-qwen-baseline/*
+*.pt
