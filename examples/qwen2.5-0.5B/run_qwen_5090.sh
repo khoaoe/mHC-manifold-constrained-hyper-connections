@@ -136,6 +136,16 @@ train_variant() {
 
     local num_fracs=1  # Ép cả HC và mHC đều tắt Frac-Connections
 
+    local current_batch_size=$BATCH_SIZE
+    local current_grad_accum=$GRAD_ACCUM
+    if [ "$method" = "baseline" ]; then
+        current_batch_size=8
+        current_grad_accum=8
+    else
+        current_batch_size=4
+        current_grad_accum=16
+    fi
+
     # Use stdbuf for realtime logging and tee to file
     stdbuf -oL -eL python -u train_qwen_hc.py \
         --method "$method" \
@@ -147,8 +157,8 @@ train_variant() {
         --warmup-iters "$WARMUP_ITERS" \
         --eval-interval "$EVAL_INTERVAL" \
         --eval-iters 50 \
-        --batch-size "$BATCH_SIZE" \
-        --grad-accum "$GRAD_ACCUM" \
+        --batch-size "$current_batch_size" \
+        --grad-accum "$current_grad_accum" \
         --block-size "$BLOCK_SIZE" \
         --dtype "$DTYPE" \
         --device cuda \
