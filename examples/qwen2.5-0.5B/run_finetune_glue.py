@@ -353,13 +353,22 @@ def main():
 
     if args.ckpt and Path(args.ckpt).exists():
         print(f"📥 Loading checkpoint from {args.ckpt}...")
-        state_dict = torch.load(args.ckpt, map_location=device, weights_only=True)
-        missing, unexpected = causal_model.load_state_dict(state_dict, strict=False)
-        if missing:
-            print(f"  ⚠️  Missing keys ({len(missing)}): {missing[:5]}{'...' if len(missing)>5 else ''}")
-        if unexpected:
-            print(f"  ⚠️  Unexpected keys ({len(unexpected)}): {unexpected[:5]}{'...' if len(unexpected)>5 else ''}")
-        print("  ✅ Checkpoint loaded.")
+        checkpoint = torch.load(args.ckpt, map_location=device)
+
+        # Extract model_state if it's wrapped
+        if "model_state" in checkpoint:
+            state_dict = checkpoint["model_state"]
+        else:
+            state_dict = checkpoint
+
+        # Handle torch.compile prefix
+        cleaned_state_dict = {}
+        for k, v in state_dict.items():
+            new_key = k.replace("_orig_mod.", "")
+            cleaned_state_dict[new_key] = v
+
+        missing, unexpected = causal_model.load_state_dict(cleaned_state_dict, strict=False)
+        print(f"  ✅ Loaded weights. Missing keys: {len(missing)} | Unexpected keys: {len(unexpected)}")
     elif args.ckpt:
         print(f"⚠️  Checkpoint not found: {args.ckpt}. Starting from random init.")
     else:

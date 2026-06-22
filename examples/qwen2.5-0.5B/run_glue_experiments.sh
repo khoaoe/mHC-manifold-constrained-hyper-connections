@@ -20,7 +20,9 @@ python run_finetune_glue.py \
     --method baseline \
     --ckpt out-qwen-baseline/ckpt.pt \
     --tasks sst2 mrpc \
-    --linear-probe
+    --linear-probe \
+    --lr 3e-3 \
+    --epochs 10
 
 # ------------------------------------
 # 2. HC: SST-2 + MRPC
@@ -30,7 +32,9 @@ python run_finetune_glue.py \
     --method hc \
     --ckpt out-qwen-hc/ckpt.pt \
     --tasks sst2 mrpc \
-    --linear-probe
+    --linear-probe \
+    --lr 3e-3 \
+    --epochs 10
 
 # ------------------------------------
 # 3. mHC: SST-2 + MRPC
@@ -40,7 +44,9 @@ python run_finetune_glue.py \
     --method mhc \
     --ckpt out-qwen-mhc/ckpt.pt \
     --tasks sst2 mrpc \
-    --linear-probe
+    --linear-probe \
+    --lr 3e-3 \
+    --epochs 10
 
 # ------------------------------------
 # 4. Vẽ biểu đồ tổng hợp

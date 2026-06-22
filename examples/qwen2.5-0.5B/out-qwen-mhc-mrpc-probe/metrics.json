@@ -1,0 +1,102 @@
+{
+  "task": "mrpc",
+  "task_description": "MRPC (Paraphrase Detection)",
+  "method": "mhc",
+  "mode": "linear_probe",
+  "model_name": "Qwen/Qwen2.5-0.5B",
+  "checkpoint": "out-qwen-mhc/ckpt.pt",
+  "hidden_size": 896,
+  "num_labels": 2,
+  "max_length": 128,
+  "batch_size": 32,
+  "lr": 0.003,
+  "total_params": 498638960,
+  "trainable_params": 1792,
+  "primary_metric": "f1",
+  "epochs": [
+    {
+      "epoch": 1,
+      "train_loss": 0.688621,
+      "accuracy": 0.698529,
+      "accuracy_pct": 69.85,
+      "f1": 0.813354,
+      "f1_pct": 81.34
+    },
+    {
+      "epoch": 2,
+      "train_loss": 0.634664,
+      "accuracy": 0.625,
+      "accuracy_pct": 62.5,
+      "f1": 0.722323,
+      "f1_pct": 72.23
+    },
+    {
+      "epoch": 3,
+      "train_loss": 0.602819,
+      "accuracy": 0.688725,
+      "accuracy_pct": 68.87,
+      "f1": 0.811852,
+      "f1_pct": 81.19
+    },
+    {
+      "epoch": 4,
+      "train_loss": 0.620329,
+      "accuracy": 0.691176,
+      "accuracy_pct": 69.12,
+      "f1": 0.814706,
+      "f1_pct": 81.47
+    },
+    {
+      "epoch": 5,
+      "train_loss": 0.599507,
+      "accuracy": 0.583333,
+      "accuracy_pct": 58.33,
+      "f1": 0.681648,
+      "f1_pct": 68.16
+    },
+    {
+      "epoch": 6,
+      "train_loss": 0.588978,
+      "accuracy": 0.637255,
+      "accuracy_pct": 63.73,
+      "f1": 0.748299,
+      "f1_pct": 74.83
+    },
+    {
+      "epoch": 7,
+      "train_loss": 0.587602,
+      "accuracy": 0.661765,
+      "accuracy_pct": 66.18,
+      "f1": 0.770764,
+      "f1_pct": 77.08
+    },
+    {
+      "epoch": 8,
+      "train_loss": 0.587075,
+      "accuracy": 0.539216,
+      "accuracy_pct": 53.92,
+      "f1": 0.568807,
+      "f1_pct": 56.88
+    },
+    {
+      "epoch": 9,
+      "train_loss": 0.553787,
+      "accuracy": 0.656863,
+      "accuracy_pct": 65.69,
+      "f1": 0.76431,
+      "f1_pct": 76.43
+    },
+    {
+      "epoch": 10,
+      "train_loss": 0.570822,
+      "accuracy": 0.683824,
+      "accuracy_pct": 68.38,
+      "f1": 0.804249,
+      "f1_pct": 80.42
+    }
+  ],
+  "best_f1": 0.814706,
+  "best_f1_pct": 81.47,
+  "best_accuracy": 0.698529,
+  "best_accuracy_pct": 69.85
+}

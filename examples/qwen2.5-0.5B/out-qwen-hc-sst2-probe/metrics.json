@@ -1,0 +1,80 @@
+{
+  "task": "sst2",
+  "task_description": "SST-2 (Sentiment Analysis)",
+  "method": "hc",
+  "mode": "linear_probe",
+  "model_name": "Qwen/Qwen2.5-0.5B",
+  "checkpoint": "out-qwen-hc/ckpt.pt",
+  "hidden_size": 896,
+  "num_labels": 2,
+  "max_length": 128,
+  "batch_size": 32,
+  "lr": 0.003,
+  "total_params": 494336864,
+  "trainable_params": 1792,
+  "primary_metric": "accuracy",
+  "epochs": [
+    {
+      "epoch": 1,
+      "train_loss": 0.591335,
+      "accuracy": 0.680046,
+      "accuracy_pct": 68.0
+    },
+    {
+      "epoch": 2,
+      "train_loss": 0.579057,
+      "accuracy": 0.716743,
+      "accuracy_pct": 71.67
+    },
+    {
+      "epoch": 3,
+      "train_loss": 0.563931,
+      "accuracy": 0.715596,
+      "accuracy_pct": 71.56
+    },
+    {
+      "epoch": 4,
+      "train_loss": 0.557861,
+      "accuracy": 0.698394,
+      "accuracy_pct": 69.84
+    },
+    {
+      "epoch": 5,
+      "train_loss": 0.558784,
+      "accuracy": 0.720183,
+      "accuracy_pct": 72.02
+    },
+    {
+      "epoch": 6,
+      "train_loss": 0.554923,
+      "accuracy": 0.71445,
+      "accuracy_pct": 71.44
+    },
+    {
+      "epoch": 7,
+      "train_loss": 0.549522,
+      "accuracy": 0.715596,
+      "accuracy_pct": 71.56
+    },
+    {
+      "epoch": 8,
+      "train_loss": 0.551845,
+      "accuracy": 0.72133,
+      "accuracy_pct": 72.13
+    },
+    {
+      "epoch": 9,
+      "train_loss": 0.545752,
+      "accuracy": 0.71445,
+      "accuracy_pct": 71.44
+    },
+    {
+      "epoch": 10,
+      "train_loss": 0.548593,
+      "accuracy": 0.715596,
+      "accuracy_pct": 71.56
+    }
+  ],
+  "best_accuracy": 0.72133,
+  "best_accuracy_pct": 72.13
+}
