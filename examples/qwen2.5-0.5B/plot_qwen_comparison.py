@@ -127,7 +127,7 @@ def _plot_grad_norm(runs: Dict[str, pd.DataFrame], output_dir: Path) -> Path:
     fig, ax = plt.subplots(figsize=(10, 6))
     for name, df in runs.items():
         # Đã SỬA: Check linh hoạt tên cột gradient
-        col_name = "grad_pre" if "grad_pre" in df else "grad_norm" if "grad_norm" in df else None
+        col_name = "grad_norm_pre_clip" if "grad_norm_pre_clip" in df else "grad_norm_post_clip" if "grad_norm_post_clip" in df else "grad_pre" if "grad_pre" in df else "grad_norm" if "grad_norm" in df else None
         if not col_name:
             continue
             
@@ -135,10 +135,12 @@ def _plot_grad_norm(runs: Dict[str, pd.DataFrame], output_dir: Path) -> Path:
         ax.plot(df["iter"], df[col_name], color=COLORS.get(name, None), alpha=0.15)
         ax.plot(df["iter"], ema_series, label=name, color=COLORS.get(name, None), linewidth=2)
         
-    ax.set_title("Gradient Norm vs Iteration (Smoothed)", fontsize=14, fontweight='bold')
+    ax.set_title("Gradient Norm vs Iteration (Convergence Phase)", fontsize=14, fontweight='bold')
     ax.set_xlabel("Iteration", fontsize=12)
     ax.set_ylabel("Gradient L2 Norm", fontsize=12)
-    ax.set_ylim(bottom=0)
+    
+    # ĐÃ SỬA: Chặt bỏ cái đỉnh lúc Warmup, chỉ zoom vào vùng 0 đến 1.5
+    ax.set_ylim(0, 1.5)
     ax.grid(True, linestyle="--", alpha=0.6)
     ax.legend(fontsize=11)
     path = output_dir / "grad_norm_curve.png"
