@@ -29,6 +29,7 @@ def _parse_runs(run_args: List[str]) -> Dict[str, Path]:
 
 
 def _ema(series: pd.Series, alpha: float) -> pd.Series:
+    """Calculate Exponential Moving Average for smoothing."""
     return series.ewm(alpha=alpha, adjust=False).mean()
 
 
@@ -56,12 +57,14 @@ def _plot_val_loss(runs: Dict[str, pd.DataFrame], output_dir: Path) -> Path:
             label=name,
             color=COLORS.get(name, None),
             linewidth=2,
+            marker='o', # Thêm marker để dễ nhìn các điểm eval
+            markersize=4
         )
-    ax.set_title("Validation Loss vs Iteration")
-    ax.set_xlabel("Iteration")
-    ax.set_ylabel("Validation Loss")
-    ax.grid(True, alpha=0.3)
-    ax.legend()
+    ax.set_title("Validation Loss vs Iteration", fontsize=14, fontweight='bold')
+    ax.set_xlabel("Iteration", fontsize=12)
+    ax.set_ylabel("Validation Loss", fontsize=12)
+    ax.grid(True, linestyle="--", alpha=0.6)
+    ax.legend(fontsize=11)
     path = output_dir / "val_loss_curve.png"
     _save_fig(fig, path)
     return path
@@ -72,19 +75,18 @@ def _plot_train_loss(runs: Dict[str, pd.DataFrame], output_dir: Path) -> Path:
     for name, df in runs.items():
         if "train_loss" not in df:
             continue
-        ema_series = _ema(df["train_loss"], alpha=0.95)
-        ax.plot(
-            df["iter"],
-            ema_series,
-            label=name,
-            color=COLORS.get(name, None),
-            linewidth=2,
-        )
-    ax.set_title("Training Loss vs Iteration (EMA)")
-    ax.set_xlabel("Iteration")
-    ax.set_ylabel("Training Loss")
-    ax.grid(True, alpha=0.3)
-    ax.legend()
+        # Đã SỬA: Dùng alpha=0.05 để làm mượt thực sự
+        ema_series = _ema(df["train_loss"], alpha=0.05) 
+        
+        # Plot đường mờ (raw) phía sau, đường đậm (smoothed) phía trước
+        ax.plot(df["iter"], df["train_loss"], color=COLORS.get(name, None), alpha=0.15)
+        ax.plot(df["iter"], ema_series, label=name, color=COLORS.get(name, None), linewidth=2)
+        
+    ax.set_title("Training Loss vs Iteration (Smoothed)", fontsize=14, fontweight='bold')
+    ax.set_xlabel("Iteration", fontsize=12)
+    ax.set_ylabel("Training Loss", fontsize=12)
+    ax.grid(True, linestyle="--", alpha=0.6)
+    ax.legend(fontsize=11)
     path = output_dir / "train_loss_curve.png"
     _save_fig(fig, path)
     return path
@@ -96,7 +98,7 @@ def _plot_train_loss_gap(runs: Dict[str, pd.DataFrame], output_dir: Path) -> Pat
     fig, ax = plt.subplots(figsize=(10, 6))
     baseline_df = runs["baseline"]
     for name, df in runs.items():
-        if "train_loss" not in df:
+        if name == "baseline" or "train_loss" not in df:
             continue
         merged = pd.merge(baseline_df[["iter", "train_loss"]], df[["iter", "train_loss"]], on="iter", suffixes=("_base", "_method"))
         base_smoothed = _ema(merged["train_loss_base"], alpha=0.05)
@@ -105,16 +107,17 @@ def _plot_train_loss_gap(runs: Dict[str, pd.DataFrame], output_dir: Path) -> Pat
         ax.plot(
             merged["iter"],
             gap,
-            label=name,
+            label=f"{name} vs baseline",
             color=COLORS.get(name, None),
             linewidth=2,
         )
-    ax.axhline(0.0, color="gray", linewidth=1.5)
-    ax.set_title("Absolute Training Loss Gap vs Iteration")
-    ax.set_xlabel("Iteration")
-    ax.set_ylabel("Loss Gap (Method - Baseline)")
-    ax.grid(True, alpha=0.3)
-    ax.legend()
+        
+    ax.axhline(0.0, color="red", linewidth=1.5, linestyle="--", label="Baseline Reference")
+    ax.set_title("Absolute Training Loss Gap (Method - Baseline)", fontsize=14, fontweight='bold')
+    ax.set_xlabel("Iteration", fontsize=12)
+    ax.set_ylabel("Loss Gap (Negative is better)", fontsize=12)
+    ax.grid(True, linestyle="--", alpha=0.6)
+    ax.legend(fontsize=11)
     path = output_dir / "train_loss_gap_curve.png"
     _save_fig(fig, path)
     return path
@@ -123,30 +126,28 @@ def _plot_train_loss_gap(runs: Dict[str, pd.DataFrame], output_dir: Path) -> Pat
 def _plot_grad_norm(runs: Dict[str, pd.DataFrame], output_dir: Path) -> Path:
     fig, ax = plt.subplots(figsize=(10, 6))
     for name, df in runs.items():
-        if "grad_norm" not in df:
+        # Đã SỬA: Check linh hoạt tên cột gradient
+        col_name = "grad_pre" if "grad_pre" in df else "grad_norm" if "grad_norm" in df else None
+        if not col_name:
             continue
-        ema_series = _ema(df["grad_norm"], alpha=0.1)
-        ax.plot(
-            df["iter"],
-            ema_series,
-            label=name,
-            color=COLORS.get(name, None),
-            linewidth=2,
-        )
-    ax.set_title("Gradient Norm vs Iteration")
-    ax.set_xlabel("Iteration")
-    ax.set_ylabel("Gradient Norm")
+            
+        ema_series = _ema(df[col_name], alpha=0.05)
+        ax.plot(df["iter"], df[col_name], color=COLORS.get(name, None), alpha=0.15)
+        ax.plot(df["iter"], ema_series, label=name, color=COLORS.get(name, None), linewidth=2)
+        
+    ax.set_title("Gradient Norm vs Iteration (Smoothed)", fontsize=14, fontweight='bold')
+    ax.set_xlabel("Iteration", fontsize=12)
+    ax.set_ylabel("Gradient L2 Norm", fontsize=12)
     ax.set_ylim(bottom=0)
-    ax.grid(True, alpha=0.3)
-    ax.legend()
+    ax.grid(True, linestyle="--", alpha=0.6)
+    ax.legend(fontsize=11)
     path = output_dir / "grad_norm_curve.png"
     _save_fig(fig, path)
     return path
 
 
 def _plot_best_val_bar(runs: Dict[str, pd.DataFrame], output_dir: Path) -> Path:
-    variants = []
-    values = []
+    variants, values = [], []
     for name, df in runs.items():
         subset = df.dropna(subset=["val_loss"])
         if subset.empty:
@@ -154,20 +155,23 @@ def _plot_best_val_bar(runs: Dict[str, pd.DataFrame], output_dir: Path) -> Path:
         variants.append(name)
         values.append(subset["val_loss"].min())
 
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.bar(variants, values, color=[COLORS.get(v, "#999999") for v in variants])
-    ax.set_title("Best Validation Loss")
-    ax.set_xlabel("Variant")
-    ax.set_ylabel("Best Val Loss")
-    ax.grid(True, axis="y", alpha=0.3)
+    fig, ax = plt.subplots(figsize=(8, 6))
+    bars = ax.bar(variants, values, color=[COLORS.get(v, "#999999") for v in variants], width=0.5)
+    
+    # Đã SỬA: Thêm Text nổi trên đỉnh cột
+    ax.bar_label(bars, fmt='%.4f', padding=5, fontsize=12, fontweight='bold')
+    
+    ax.set_title("Best Validation Loss", fontsize=14, fontweight='bold')
+    ax.set_ylabel("Loss (Lower is better)", fontsize=12)
+    ax.set_ylim(0, max(values) * 1.15) # Tăng trần để không bị cắt chữ
+    ax.grid(True, axis="y", linestyle="--", alpha=0.4)
     path = output_dir / "best_val_loss_bar.png"
     _save_fig(fig, path)
     return path
 
 
 def _plot_final_ppl_bar(runs: Dict[str, pd.DataFrame], output_dir: Path) -> Path:
-    variants = []
-    values = []
+    variants, values = [], []
     for name, df in runs.items():
         subset = df.dropna(subset=["val_loss"])
         if subset.empty:
@@ -176,34 +180,26 @@ def _plot_final_ppl_bar(runs: Dict[str, pd.DataFrame], output_dir: Path) -> Path
         variants.append(name)
         values.append(math.exp(last_val) if last_val < 20 else float("inf"))
 
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.bar(variants, values, color=[COLORS.get(v, "#999999") for v in variants])
-    ax.set_title("Final Validation Perplexity")
-    ax.set_xlabel("Variant")
-    ax.set_ylabel("Final Val PPL")
-    ax.grid(True, axis="y", alpha=0.3)
+    fig, ax = plt.subplots(figsize=(8, 6))
+    bars = ax.bar(variants, values, color=[COLORS.get(v, "#999999") for v in variants], width=0.5)
+    
+    # Đã SỬA: Thêm Text nổi trên đỉnh cột
+    ax.bar_label(bars, fmt='%.4f', padding=5, fontsize=12, fontweight='bold')
+    
+    ax.set_title("Final Validation Perplexity", fontsize=14, fontweight='bold')
+    ax.set_ylabel("Perplexity (Lower is better)", fontsize=12)
+    ax.set_ylim(0, max(values) * 1.15)
+    ax.grid(True, axis="y", linestyle="--", alpha=0.4)
     path = output_dir / "final_val_ppl_bar.png"
     _save_fig(fig, path)
     return path
 
 
-def _plot_amax_curve(
-    runs: Dict[str, pd.DataFrame],
-    output_dir: Path,
-    col: str,
-    filename: str,
-    title: str,
-) -> Path:
+def _plot_amax_curve(runs: Dict[str, pd.DataFrame], output_dir: Path, col: str, filename: str, title: str) -> Path:
     fig, ax = plt.subplots(figsize=(10, 6))
 
-    ax.axhline(
-        1.0,
-        color=COLORS.get("baseline", "#4C78A8"),
-        linestyle="--",
-        linewidth=2,
-        label="baseline = 1.0 (identity)",
-    )
-    ax.axhline(1.6, color="#777777", linestyle=":", linewidth=1.5, label="mHC bound = 1.6")
+    ax.axhline(1.0, color=COLORS.get("baseline", "#4C78A8"), linestyle="--", linewidth=2, label="Baseline = 1.0 (Identity)")
+    ax.axhline(1.6, color="#777777", linestyle=":", linewidth=2, label="mHC Safety Bound = 1.6")
 
     for name, df in runs.items():
         if name == "baseline":
@@ -219,11 +215,15 @@ def _plot_amax_curve(
             linewidth=2,
         )
 
-    ax.set_title(title)
-    ax.set_xlabel("Iteration")
-    ax.set_ylabel(col.replace("_", " ").title())
-    ax.grid(True, alpha=0.3)
-    ax.legend()
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.set_xlabel("Iteration", fontsize=12)
+    ax.set_ylabel(col.replace("_", " ").title() + " (Log Scale)", fontsize=12)
+    
+    # Đã SỬA: Đưa Amax về thang đo Logarit để thấy được vực thẳm của HC vs mHC
+    ax.set_yscale('log')
+    
+    ax.grid(True, which="both", linestyle="--", alpha=0.6)
+    ax.legend(fontsize=11)
 
     path = output_dir / filename
     _save_fig(fig, path)
@@ -236,8 +236,8 @@ def main() -> None:
     parser.add_argument("--output-dir", required=True)
     args = parser.parse_args()
 
-    sns.set_theme(style="white")
-    plt.style.use("seaborn-v0_8-white")
+    # Dùng whitegrid cho nó khoa học
+    sns.set_theme(style="whitegrid")
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -254,29 +254,21 @@ def main() -> None:
         outputs.append(gap_path)
         
     outputs.append(_plot_grad_norm(runs, output_dir))
-    
     outputs.append(_plot_best_val_bar(runs, output_dir))
     outputs.append(_plot_final_ppl_bar(runs, output_dir))
+    
     outputs.append(
         _plot_amax_curve(
-            runs,
-            output_dir,
-            col="amax_fwd_max",
-            filename="amax_fwd_curve.png",
-            title="Amax Forward Gain vs Iteration",
+            runs, output_dir, col="amax_fwd_max", filename="amax_fwd_curve.png", title="Amax Forward Gain vs Iteration (Topology Stability)"
         )
     )
     outputs.append(
         _plot_amax_curve(
-            runs,
-            output_dir,
-            col="amax_bwd_max",
-            filename="amax_bwd_curve.png",
-            title="Amax Backward Gain vs Iteration",
+            runs, output_dir, col="amax_bwd_max", filename="amax_bwd_curve.png", title="Amax Backward Gain vs Iteration (Topology Stability)"
         )
     )
 
-    print("✅ Generated figures:")
+    print("✅ Generated figures successfully:")
     for path in outputs:
         print(f"✅ {path}")
 
